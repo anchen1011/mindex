@@ -3,3 +3,5 @@ __pycache__/
 *.pyo
 *.egg-info/
 .mindex/
+logs/
+*.swp

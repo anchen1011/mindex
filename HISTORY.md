@@ -15,6 +15,9 @@
   what was executed and whether it succeeded or failed.
 - Each task must be evaluated by the successful completion of its
   corresponding tests.
+- After implementation and passing tests, Codex should do a simplification
+  pass over the modifications and rerun the relevant tests to keep the project
+  simple.
 
 #### 0. Git Management and Pull Requests
 
@@ -66,6 +69,8 @@
 - Organize the `logs` directory by session, timestamp, and specific prompt.
 - Ensure Codex proactively records its own activity and internal processes into
   this logging structure.
+- Keep `logs/` as a local working artifact rather than committing it to Git or
+  GitHub.
 
 #### 3. Command Alias (`mindex`)
 

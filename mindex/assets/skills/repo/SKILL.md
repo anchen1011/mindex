@@ -12,5 +12,7 @@ Required habits:
 1. Keep `README.md` current when features or workflows change.
 2. Update `HISTORY.md` when project requirements or tracked statuses change.
 3. Add explicit tests for meaningful changes.
-4. Record prompts, actions, outputs, and test results in `logs/`.
-5. Keep meaningful AI-generated work on a GitHub PR branch rather than only on the local machine.
+4. Record prompts, actions, outputs, and test results in the local `logs/` directory.
+5. After the implementation is complete and tests pass, do a simplification pass over the changes and, when useful, the surrounding project code.
+6. Re-run the relevant tests after the simplification pass to confirm the project stays correct while becoming simpler.
+7. Keep meaningful AI-generated work on a GitHub PR branch rather than only on the local machine.

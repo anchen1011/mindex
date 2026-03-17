@@ -9,7 +9,7 @@ GitHub PR-first workflow.
 The repository currently includes:
 
 - project history and requirement tracking in `HISTORY.md`
-- structured task logs under `logs/`
+- structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
 
@@ -66,7 +66,9 @@ Current implementation:
 - `mindex.logging_utils` creates the log directory layout
 - `mindex configure` writes prompt, action, metadata, and status files
 - `mindex` launcher records command metadata and terminal capture paths
-- repository work also records validation results under `logs/`
+- repository work also records validation results under the local `logs/`
+  directory
+- `logs/` is intended as a local artifact and should not be committed to Git
 
 ### 3. `mindex` command
 
@@ -111,6 +113,8 @@ The repo skill is intended to:
 - work is not complete when code is only written
 - every meaningful task must include explicit tests
 - test results must be recorded in the logging system
+- after tests pass, Codex should do a simplification pass and rerun the
+  relevant tests so the project stays simple
 
 ### Git and PR workflow
 
@@ -128,7 +132,7 @@ The repo skill is intended to:
 
 - `README.md` - feature and workflow documentation
 - `HISTORY.md` - tracked requirements and status
-- `logs/` - structured execution, validation, and policy logs
+- `logs/` - structured local execution, validation, and policy logs
 - `mindex/` - Python package for configure, logging, install hooks, skills,
   and launcher code
 - `tests/` - automated validation for the package behavior
