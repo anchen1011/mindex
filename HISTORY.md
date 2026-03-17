@@ -21,10 +21,11 @@
 - Status: active
 - All changes must be managed under Git.
 - Changes should be committed systematically as each sub-task is finished.
-- Because the repository is hosted on GitHub, contributions should follow a
-  Pull Request workflow rather than direct pushes to `main`.
-- Direct pushes to `main` are not allowed; changes should be prepared on
-  branches and merged through PR review.
+- Because the repository is hosted on GitHub, all contributions must go
+  through a Pull Request workflow.
+- Direct pushes are not allowed.
+- Codex must not push code directly.
+- Changes should be prepared on branches and merged only through PR review.
 
 #### 1. Configure Skill Development
 
