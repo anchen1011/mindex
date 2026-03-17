@@ -33,6 +33,14 @@
   repository unless instructed otherwise.
 - Changes should be prepared on branches and merged only through PR review.
 
+#### 0. README Documentation
+
+- Status: active
+- All meaningful project features and workflows must be documented in
+  `README.md`.
+- README updates should be treated as part of feature completion, not as an
+  optional follow-up task.
+
 #### 1. Configure Skill Development
 
 - Status: pending
@@ -66,6 +74,13 @@
   configuration.
 - Keep the original `codex` command unchanged so its normal behavior remains
   intact outside the project-specific workflow.
+
+#### 4. Mindex Repo Skill
+
+- Status: pending
+- Create a dedicated `Mindex repo` skill for working on this repository.
+- Ensure the repo skill is documented in `README.md` alongside the other
+  project features.
 
 ### Notes
 
