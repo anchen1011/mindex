@@ -1,7 +1,48 @@
+# Python bytecode and caches
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+
+# Python packaging and build outputs
 *.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python test, coverage, and type-checker artifacts
+.coverage
+.coverage.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+htmlcov/
+coverage.xml
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local project state
 .mindex/
 logs/
+
+# Editor and OS artifacts
 *.swp
+*.swo
+*~
+.vscode/
+.idea/
+.DS_Store
