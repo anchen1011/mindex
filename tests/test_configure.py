@@ -40,6 +40,7 @@ class ConfigureTests(unittest.TestCase):
             self.assertEqual(report['codex_result']['status'], 'dry-run')
             self.assertTrue((project_root / '.mindex' / 'codex_instructions.md').exists())
             self.assertTrue((codex_home / 'skills' / 'configure' / 'SKILL.md').exists())
+            self.assertTrue((codex_home / 'skills' / 'repo' / 'SKILL.md').exists())
             self.assertTrue((codex_home / 'config.toml').exists())
             self.assertTrue((project_root / 'logs').exists())
 

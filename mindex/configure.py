@@ -103,7 +103,7 @@ Use this repository with the Mindex workflow.
 - Record meaningful activity under `{project_root / 'logs'}`.
 - Run explicit tests before calling a task complete.
 - Keep meaningful AI-generated work on a GitHub PR branch.
-- Use the `configure` and `mindex-repo` skills installed by Mindex when they apply.
+- Use the `configure` and `repo` skills installed by Mindex when they apply.
 """
     path.write_text(content, encoding='utf-8')
     return path

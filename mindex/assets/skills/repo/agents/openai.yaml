@@ -1,3 +1,3 @@
-display_name: Mindex Repo
+display_name: Repo
 short_description: Apply the Mindex repository workflow for docs, tests, logs, and PR discipline.
 default_prompt: Work on this Mindex repository and follow its README, HISTORY, testing, logging, and PR rules.

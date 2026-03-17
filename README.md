@@ -88,15 +88,15 @@ Current implementation:
 - when available, the launcher uses `script` to capture terminal I/O into
   `logs/`
 
-### 4. Mindex repo skill
+### 4. Repo skill under `mindex/`
 
-Mindex now includes an initial `Mindex repo` skill for working on this
+Mindex now includes an initial `repo` skill under `mindex/` for working on this
 repository itself.
 
 Current packaged skills:
 
 - `mindex/assets/skills/configure/`
-- `mindex/assets/skills/mindex-repo/`
+- `mindex/assets/skills/repo/`
 
 The repo skill is intended to:
 

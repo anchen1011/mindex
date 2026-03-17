@@ -1,9 +1,9 @@
 ---
-name: mindex repo
+name: repo
 description: Use when working on the Mindex repository itself so Codex follows the repository's README, HISTORY, testing, logging, and PR workflow requirements.
 ---
 
-# Mindex Repo
+# Repo
 
 Use this skill for repository maintenance and feature work inside `mindex`.
 

@@ -1,0 +1,86 @@
+{
+  "install_mode": "manual",
+  "dry_run": true,
+  "project_root": "/home/andrew/mindex",
+  "instructions_path": "/home/andrew/mindex/.mindex/codex_instructions.md",
+  "codex_config_path": "/tmp/tmp.sLXlNoXS98/codex-home/config.toml",
+  "skills": [
+    "/tmp/tmp.sLXlNoXS98/codex-home/skills/configure",
+    "/tmp/tmp.sLXlNoXS98/codex-home/skills/repo"
+  ],
+  "dependency_plan": [
+    {
+      "name": "miniconda",
+      "present": true,
+      "commands": [
+        [
+          "bash",
+          "-lc",
+          "curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /home/andrew/mindex/.mindex/downloads/miniconda-installer.sh"
+        ],
+        [
+          "bash",
+          "/home/andrew/mindex/.mindex/downloads/miniconda-installer.sh",
+          "-b",
+          "-p",
+          "/home/andrew/miniconda3"
+        ]
+      ]
+    },
+    {
+      "name": "npm",
+      "present": true,
+      "commands": [
+        [
+          "sudo",
+          "apt-get",
+          "update"
+        ],
+        [
+          "sudo",
+          "apt-get",
+          "install",
+          "-y",
+          "nodejs",
+          "npm"
+        ]
+      ]
+    },
+    {
+      "name": "tmux",
+      "present": true,
+      "commands": [
+        [
+          "sudo",
+          "apt-get",
+          "install",
+          "-y",
+          "tmux"
+        ]
+      ]
+    },
+    {
+      "name": "codex",
+      "present": true,
+      "commands": [
+        [
+          "npm",
+          "install",
+          "-g",
+          "@openai/codex"
+        ]
+      ]
+    }
+  ],
+  "command_results": [],
+  "codex_result": {
+    "status": "dry-run",
+    "command": [
+      "/usr/local/bin/codex",
+      "exec",
+      "-C",
+      "/home/andrew/mindex",
+      "Confirm that the Mindex configure workflow files exist and mention README.md, HISTORY.md, and logs/ in one sentence."
+    ]
+  }
+}

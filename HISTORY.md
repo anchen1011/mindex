@@ -75,10 +75,10 @@
 - Keep the original `codex` command unchanged so its normal behavior remains
   intact outside the project-specific workflow.
 
-#### 4. Mindex Repo Skill
+#### 4. Repo Skill Under `mindex/`
 
 - Status: in progress
-- Create a dedicated `Mindex repo` skill for working on this repository.
+- Create a dedicated `repo` skill under `mindex/` for working on this repository.
 - Ensure the repo skill is documented in `README.md` alongside the other
   project features.
 
