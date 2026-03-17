@@ -25,6 +25,12 @@
   through a Pull Request workflow.
 - Direct pushes are not allowed.
 - Codex must not push code directly.
+- Meaningful AI-generated work must be published to GitHub and must not remain
+  only on the local machine.
+- For non-personal repositories, use a fork-and-PR workflow and avoid direct
+  changes to the original upstream repository.
+- For personal repositories, use a branch-and-PR workflow in the same
+  repository unless instructed otherwise.
 - Changes should be prepared on branches and merged only through PR review.
 
 #### 1. Configure Skill Development
