@@ -13,16 +13,31 @@ The repository currently includes:
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
 
-The repository is being expanded to add the core runtime features below.
+The repository now has an initial implementation for the core runtime features
+below, with additional hardening and integration work still in progress.
 
-## Planned features
+## Core features
 
 ### 1. Configure skill
 
-Mindex will provide a `configure` skill that acts as the central hub for
-project setup.
+Mindex now includes an initial `configure` skill plus a Python-based configure
+workflow that acts as the central hub for project setup.
 
-Planned workflows:
+Current commands:
+
+- `mindex configure --project-root <root> --dry-run`
+- `python -m mindex.configure configure --project-root <root> --dry-run`
+
+Implemented behavior:
+
+- writes project instructions into `.mindex/codex_instructions.md`
+- installs packaged skills into `~/.codex/skills/` or a provided Codex home
+- writes a managed `[profiles.mindex]` block into the Codex config file
+- prepares dependency installation commands for Miniconda, NPM, Tmux, and
+  Codex
+- records configure runs under `logs/`
+
+Target workflows:
 
 - **New installation**
   - support `pip install -e .`
@@ -37,7 +52,7 @@ Planned workflows:
 
 ### 2. Logging system
 
-Mindex will standardize logging for important Codex activity.
+Mindex now includes an initial logging helper and launcher logging flow.
 
 Requirements:
 
@@ -46,10 +61,16 @@ Requirements:
 - prompts, actions, outputs, and test results are captured together
 - Codex activity should be recorded proactively rather than only after failure
 
+Current implementation:
+
+- `mindex.logging_utils` creates the log directory layout
+- `mindex configure` writes prompt, action, metadata, and status files
+- `mindex` launcher records command metadata and terminal capture paths
+- repository work also records validation results under `logs/`
+
 ### 3. `mindex` command
 
-Mindex will provide a dedicated `mindex` command that launches Codex with the
-project's configuration.
+Mindex now includes an initial `mindex` command entry point.
 
 Requirements:
 
@@ -59,12 +80,25 @@ Requirements:
 - project-specific configuration is applied through Mindex rather than by
   replacing the global Codex installation
 
+Current implementation:
+
+- the package exposes `mindex` as a console script
+- `mindex configure ...` runs the configure workflow
+- other `mindex ...` invocations proxy to `codex` from the repo root
+- when available, the launcher uses `script` to capture terminal I/O into
+  `logs/`
+
 ### 4. Mindex repo skill
 
-The project will also provide a dedicated `Mindex repo` skill for working on
-this repository itself.
+Mindex now includes an initial `Mindex repo` skill for working on this
+repository itself.
 
-This repo skill is intended to:
+Current packaged skills:
+
+- `mindex/assets/skills/configure/`
+- `mindex/assets/skills/mindex-repo/`
+
+The repo skill is intended to:
 
 - centralize repository-specific guidance
 - help Codex understand the project workflow and structure
@@ -95,9 +129,21 @@ This repo skill is intended to:
 - `README.md` - feature and workflow documentation
 - `HISTORY.md` - tracked requirements and status
 - `logs/` - structured execution, validation, and policy logs
+- `mindex/` - Python package for configure, logging, install hooks, skills,
+  and launcher code
+- `tests/` - automated validation for the package behavior
+- `setup.py` - packaging plus editable-install hook entry
+
+## Validation
+
+Current automated validation includes:
+
+- `python3 -m unittest discover -s tests -v`
+- editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 pip install -e .`
+- dry-run configure validation through the installed `mindex` command
 
 ## Development note
 
 The implementation work for the configure skill, runtime logging, repo skill,
-and `mindex` launcher is still in progress and will be completed through the
-project's PR-based workflow.
+and `mindex` launcher is now started in-repo and will continue through the
+project's PR-based workflow until the remaining integration gaps are closed.

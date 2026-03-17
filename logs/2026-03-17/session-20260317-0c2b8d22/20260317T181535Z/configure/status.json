@@ -1,0 +1,6 @@
+{
+  "task": "configure",
+  "install_mode": "editable",
+  "status": "passed",
+  "dry_run": false
+}

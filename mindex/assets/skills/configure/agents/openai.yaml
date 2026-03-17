@@ -1,0 +1,3 @@
+display_name: Configure
+short_description: Set up the Mindex environment, Codex profile, and local skills.
+default_prompt: Configure this Mindex repository and validate the result.

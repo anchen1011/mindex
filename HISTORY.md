@@ -43,7 +43,7 @@
 
 #### 1. Configure Skill Development
 
-- Status: pending
+- Status: in progress
 - Implement a `configure` skill that acts as the central hub for project
   configuration details and setup behavior.
 - Support a new-install workflow where a user clones the project and runs
@@ -58,7 +58,7 @@
 
 #### 2. Logging System Specification
 
-- Status: pending
+- Status: in progress
 - Define and implement a standardized logging system for critical Codex
   interactions.
 - Capture input prompts together with the resulting actions and outputs.
@@ -69,7 +69,7 @@
 
 #### 3. Command Alias (`mindex`)
 
-- Status: pending
+- Status: in progress
 - Implement `mindex` as the primary command for launching this project's Codex
   configuration.
 - Keep the original `codex` command unchanged so its normal behavior remains
@@ -77,7 +77,7 @@
 
 #### 4. Mindex Repo Skill
 
-- Status: pending
+- Status: in progress
 - Create a dedicated `Mindex repo` skill for working on this repository.
 - Ensure the repo skill is documented in `README.md` alongside the other
   project features.

@@ -1,0 +1,6 @@
+{
+  "task": "configure",
+  "install_mode": "manual",
+  "status": "passed",
+  "dry_run": true
+}
