@@ -181,6 +181,27 @@ class UiTests(unittest.TestCase):
 
         self.assertIsNone(handler._check_origin(require_auth=True))
 
+    def test_disable_csrf_checks_bypasses_csrf_validation(self) -> None:
+        session = ui_module.SessionRecord(
+            token="session-token",
+            username="admin",
+            csrf_token="expected-token",
+            expires_at=9999999999.0,
+        )
+        handler = ui_module.UiRequestHandler.__new__(ui_module.UiRequestHandler)
+        handler.command = "POST"
+        handler.headers = {"X-Mindex-CSRF-Token": "wrong-token"}
+        handler.app = SimpleNamespace(
+            config=SimpleNamespace(
+                disable_origin_checks=True,
+                disable_csrf_checks=True,
+                allowed_origins=("http://127.0.0.1:8765",),
+            )
+        )
+        handler._session_from_cookie = lambda: session
+
+        self.assertIs(handler._require_session(require_csrf=True), session)
+
     def test_agent_manager_runs_python_module_agents_without_shelling_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -287,6 +308,7 @@ class UiTests(unittest.TestCase):
             self.assertEqual(payload["project_root"], str(root.resolve()))
             self.assertEqual(payload["username"], "admin")
             self.assertFalse(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
 
     def test_cli_routes_ui_init_config_with_disabled_origin_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -312,6 +334,33 @@ class UiTests(unittest.TestCase):
             payload = json.loads(stdout_buffer.getvalue())
             self.assertTrue(payload["allow_remote"])
             self.assertTrue(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
+
+    def test_cli_routes_ui_init_config_with_disabled_csrf_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            stdout_buffer = io.StringIO()
+
+            with redirect_stdout(stdout_buffer):
+                result = cli_main(
+                    [
+                        "ui",
+                        "init-config",
+                        "--project-root",
+                        str(root),
+                        "--password",
+                        "deck-secret",
+                        "--allow-remote",
+                        "--disable-csrf-checks",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertTrue(payload["allow_remote"])
+            self.assertFalse(payload["disable_origin_checks"])
+            self.assertTrue(payload["disable_csrf_checks"])
 
     def test_cli_routes_ui_reset_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -346,6 +395,7 @@ class UiTests(unittest.TestCase):
             self.assertEqual(payload["host"], "127.0.0.1")
             self.assertEqual(payload["port"], 8765)
             self.assertFalse(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
             app = MindexUiApp(load_or_create_ui_config(project_root=root).config)
             self.assertTrue(app.verify_password("deck-secret"))
 
