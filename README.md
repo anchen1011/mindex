@@ -25,7 +25,7 @@ below, with additional hardening and integration work still in progress.
 
 ### 1. Configure skill
 
-Mindex now includes an initial `configure` skill plus a Python-based configure
+Mindex now includes a packaged `configure` skill plus a Python-based configure
 workflow that acts as the central hub for project setup.
 
 Current commands:
@@ -35,10 +35,17 @@ Current commands:
 
 Implemented behavior:
 
+- installing Mindex with `pip install .` or `pip install -e .` installs the
+  `mindex` command and runs Mindex auto-configure by default unless
+  `MINDEX_SKIP_AUTO_CONFIGURE=1`
+- that install flow turns `mindex` into the Mindex-enhanced Codex entry point
+  for this repository by writing the managed instructions, packaged skills, and
+  profile settings described here
 - writes project instructions into `.mindex/codex_instructions.md`
 - installs packaged skills into `~/.codex/skills/` or a provided Codex home
 - writes a managed `[profiles.mindex]` block into the Codex config file
-- runs from editable installs through `setup.py` unless `MINDEX_SKIP_AUTO_CONFIGURE=1`
+- leaves the original `codex` command installed and unchanged, so plain Codex
+  remains vanilla unless the user explicitly opts into the Mindex-managed setup
 - prepares dependency installation commands for Miniconda, NPM, Tmux, and
   Codex
 - records configure runs under `logs/`
@@ -46,15 +53,20 @@ Implemented behavior:
 Target workflows:
 
 - **New installation**
-  - support `pip install -e .`
+  - support `pip install .` and `pip install -e .`
+  - install Mindex so the `mindex` command is ready as the enhanced Codex entry
+    point for this repository
+  - keep the original `codex` command available in its normal vanilla state
   - install required dependencies, including Miniconda, Codex, NPM, and Tmux
-  - use Codex during setup to configure project settings
 
 - **Existing Codex workflow**
-  - allow a user who already has Codex installed to invoke the `configure`
-    skill directly inside Codex
-  - configure the Mindex environment and required parameters without changing
-    the base `codex` command behavior
+  - allow a user who already has Codex installed to ask Codex to configure
+    Mindex or to run `mindex configure` directly
+  - apply the same managed instructions, packaged skills, and Mindex profile to
+    that Codex environment
+  - configure Codex with all of the repository rules defined here while still
+    leaving the base `codex` command behavior untouched unless the user chooses
+    the Mindex-managed setup
 
 ### 2. Logging system
 
@@ -94,7 +106,8 @@ Requirements:
 
 Current implementation:
 
-- the package exposes `mindex` as a console script
+- the package exposes `mindex` as a console script and intended enhanced Codex
+  entry point for this repository
 - `mindex configure ...` runs the configure workflow
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
@@ -103,6 +116,8 @@ Current implementation:
   scope so the PR reflects every commit included in that branch, not just the
   latest change
 - other `mindex ...` invocations proxy to `codex` from the repo root
+- plain `codex` still exists as the unchanged vanilla command outside the
+  Mindex-managed workflow
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch
@@ -163,6 +178,8 @@ The repo skill is intended to:
 - help Codex understand the project workflow and structure
 - reinforce testing, logging, GitHub publication, and PR requirements when
   working in this repo
+- require meaningful repository work to be published with `mindex publish-pr`
+  or an equivalent verified PR workflow before it is considered complete
 
 ## Project rules
 
@@ -198,6 +215,9 @@ The repo skill is intended to:
   interaction; starting from a protected branch should create a new feature
   branch and PR, while follow-up work on the same feature branch should update
   that branch's existing PR
+- that automatic branch-and-PR publication behavior is still the default even
+  when the user only asks for code, docs, tests, or behavior changes and does
+  not explicitly mention repo workflow, Git, GitHub, branches, or PRs
 - never push directly to `main`, `master`, `production`, or another protected
   release branch
 - never work on or overwrite another person's branch unless the user explicitly

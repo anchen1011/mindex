@@ -65,10 +65,16 @@ You are working in `{project_root}` through the Mindex Codex wrapper.
 Mindex is a project-specific Codex wrapper. Treat these instructions as the
 operating policy for future repository work, not as a one-off task note.
 
+Installing Mindex through `pip install` prepares `mindex` as the
+Mindex-enhanced Codex entry point for this repository by default unless
+`MINDEX_SKIP_AUTO_CONFIGURE=1`.
+
 ## Operating rules
 
 - Run explicit tests for every meaningful change and record the results under `logs/`.
-- Keep the original `codex` command untouched; use `mindex` for repo-specific workflows.
+- Keep the original `codex` command untouched; it remains the plain vanilla Codex command.
+- Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings for this repository.
+- If a user asks Codex to configure Mindex, apply the same managed instructions, packaged skills, and profile block to that Codex environment.
 - Publish meaningful AI-generated changes to GitHub instead of leaving them only on the local machine.
 - Use one branch per feature and one PR per feature.
 - Do not bundle multiple independent features into a single branch or PR.
@@ -78,6 +84,7 @@ operating policy for future repository work, not as a one-off task note.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
+- Apply that branch-and-PR publication policy even when the user only asks for code, docs, tests, or behavior changes and does not explicitly mention repo workflow, Git, GitHub, branches, or PRs.
 - Treat `README.md` updates as part of feature completion when the workflow changes.
 
 ## GitHub workflow policy
