@@ -25,6 +25,7 @@ class RepoSkillTests(unittest.TestCase):
         self.assertIn("do not use this skill as a generic setup guide", text)
         self.assertIn("Codex wrapper", text)
         self.assertIn("pushed to GitHub through feature branches and PRs", text)
+        self.assertIn("multiple agents or parallel efforts", text)
         self.assertIn("never allow Mindex-managed behavior to push directly", text)
 
     def test_packaged_skills_have_frontmatter(self) -> None:
@@ -46,8 +47,10 @@ class RepoSkillTests(unittest.TestCase):
         self.assertIn("publish meaningful work to GitHub through a PR workflow", repo_text)
         self.assertIn("avoid direct work on `main`, `master`, `production`", repo_text)
         self.assertIn("prefer a fork owned by the user", repo_text)
+        self.assertIn("multiple agents or parallel efforts", repo_text)
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
+        self.assertIn("multiple agents or parallel efforts pursue different goals", configure_text)
         self.assertIn(
             "enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes",
             configure_text,

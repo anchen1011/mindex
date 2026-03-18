@@ -103,6 +103,12 @@ Current implementation:
   scope so the PR reflects every commit included in that branch, not just the
   latest change
 - other `mindex ...` invocations proxy to `codex` from the repo root
+- the launcher exports `CODEX_HOME` explicitly before invoking `codex`, so
+  Codex config values such as API keys and base URLs are found consistently
+  even when `mindex` is launched outside the home directory
+- launcher session logs default to the Mindex install's own `logs/` directory,
+  so `mindex` does not create stray `~/logs` directories just because it was
+  launched from the home folder
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch
@@ -198,6 +204,9 @@ The repo skill is intended to:
   interaction; starting from a protected branch should create a new feature
   branch and PR, while follow-up work on the same feature branch should update
   that branch's existing PR
+- when multiple agents or parallel efforts are pursuing different goals, each
+  goal should use its own branch and its own PR instead of being combined into
+  one branch or one PR
 - never push directly to `main`, `master`, `production`, or another protected
   release branch
 - never work on or overwrite another person's branch unless the user explicitly

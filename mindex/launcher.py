@@ -8,6 +8,7 @@ import subprocess
 from typing import Iterable
 
 from mindex.github_workflow import WorkflowError, ensure_feature_branch, maybe_publish_session
+from mindex.configure import default_codex_home, default_logs_root
 from mindex.logging_utils import append_action, create_log_run, write_status
 
 
@@ -34,10 +35,13 @@ def launch_codex(
 ) -> int:
     args = list(argv)
     launch_root = find_project_root(project_root)
-    resolved_logs_root = Path(logs_root).resolve() if logs_root else (launch_root / "logs")
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
+    if env and "HOME" in env and "CODEX_HOME" not in env:
+        run_env.pop("CODEX_HOME", None)
+    resolved_logs_root = Path(logs_root).resolve() if logs_root else default_logs_root(run_env).resolve()
+    run_env.setdefault("CODEX_HOME", str(default_codex_home(run_env).resolve()))
     command = [resolve_codex_command(run_env), *args]
 
     log_run = create_log_run(
@@ -48,9 +52,11 @@ def launch_codex(
             "project_root": str(launch_root),
             "command": command,
             "cwd": str(Path.cwd().resolve()),
+            "codex_home": run_env["CODEX_HOME"],
         },
     )
     append_action(log_run, f"Proxy command: {shlex.join(command)}")
+    append_action(log_run, f"CODEX_HOME: {run_env['CODEX_HOME']}")
 
     try:
         requested_branch = run_env.get("MINDEX_FEATURE_BRANCH")

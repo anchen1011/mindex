@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from mindex.configure import configure_project
+from mindex.configure import configure_project, default_logs_root
 
 
 class ConfigureTests(unittest.TestCase):
@@ -42,8 +42,9 @@ class ConfigureTests(unittest.TestCase):
             root.mkdir()
             self._create_repo(root)
             codex_home = Path(tmpdir) / "codex-home"
+            logs_root = Path(tmpdir) / "logs"
 
-            result = configure_project(project_root=root, codex_home=codex_home, dry_run=False)
+            result = configure_project(project_root=root, codex_home=codex_home, logs_root=logs_root, dry_run=False)
 
             instructions_text = result.instructions_path.read_text(encoding="utf-8")
             config_text = result.codex_config_path.read_text(encoding="utf-8")
@@ -56,6 +57,16 @@ class ConfigureTests(unittest.TestCase):
             self.assertTrue((codex_home / "skills" / "repo" / "SKILL.md").exists())
             self.assertIn("[profiles.mindex]", config_text)
             self.assertIn("MINDEX_INSTRUCTIONS_FILE", config_text)
+
+    def test_configure_defaults_logs_to_mindex_logs_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            root.mkdir()
+            self._create_repo(root)
+
+            result = configure_project(project_root=root, dry_run=True)
+
+            self.assertEqual(result.logs_root, default_logs_root().resolve())
 
     def test_module_cli_supports_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

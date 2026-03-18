@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import subprocess
 
+from mindex.configure import default_logs_root
 from mindex.launcher import find_project_root, launch_codex
 
 
@@ -120,13 +121,16 @@ class LauncherTests(unittest.TestCase):
                 "import json, os, sys\n"
                 "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
                 "with open(path, 'w', encoding='utf-8') as handle:\n"
-                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
             output_path = Path(tmpdir) / "codex-output.json"
+            home_dir = Path(tmpdir) / "home"
+            home_dir.mkdir()
 
             env = {
+                "HOME": str(home_dir),
                 "MINDEX_CODEX_BIN": str(fake_codex),
                 "MINDEX_DISABLE_SCRIPT": "1",
                 "MINDEX_FAKE_OUTPUT": str(output_path),
@@ -142,12 +146,91 @@ class LauncherTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
             self.assertEqual(payload["args"], ["status", "--json"])
-
+            self.assertEqual(payload["codex_home"], str((home_dir / ".codex").resolve()))
             status_files = list(logs_root.glob("**/status.json"))
             self.assertEqual(len(status_files), 1)
             status = json.loads(status_files[0].read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "success")
             self.assertEqual(status["returncode"], 0)
+
+    def test_launch_codex_defaults_logs_to_mindex_logs_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            nested = root / "nested"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            default_logs = Path(tmpdir) / "mindex-logs"
+            nested.mkdir(parents=True)
+            fake_bin_dir.mkdir()
+            (root / "README.md").write_text("# repo\n", encoding="utf-8")
+            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
+                "with open(path, 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            output_path = Path(tmpdir) / "codex-output.json"
+
+            env = {
+                "MINDEX_LOGS_ROOT": str(default_logs),
+                "MINDEX_CODEX_BIN": str(fake_codex),
+                "MINDEX_DISABLE_SCRIPT": "1",
+                "MINDEX_FAKE_OUTPUT": str(output_path),
+            }
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(nested)
+                returncode = launch_codex(["status"], project_root=find_project_root(), env=env)
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(returncode, 0)
+            self.assertFalse((Path.home() / "logs").exists())
+            default_status_files = list(default_logs.glob("**/*-launcher/status.json"))
+            self.assertTrue(default_status_files)
+
+    def test_launch_codex_preserves_explicit_codex_home_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            root.mkdir()
+            fake_bin_dir.mkdir()
+            (root / "README.md").write_text("# repo\n", encoding="utf-8")
+            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os\n"
+                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            output_path = Path(tmpdir) / "codex-output.json"
+            explicit_codex_home = Path(tmpdir) / "explicit-codex-home"
+
+            returncode = launch_codex(
+                [],
+                project_root=root,
+                logs_root=logs_root,
+                env={
+                    "MINDEX_CODEX_BIN": str(fake_codex),
+                    "MINDEX_DISABLE_SCRIPT": "1",
+                    "MINDEX_FAKE_OUTPUT": str(output_path),
+                    "CODEX_HOME": str(explicit_codex_home),
+                },
+            )
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["codex_home"], str(explicit_codex_home))
 
     def test_launch_codex_creates_feature_branch_before_running_from_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -268,7 +351,7 @@ class LauncherTests(unittest.TestCase):
             ).stdout.strip()
             self.assertEqual(current_branch, "mindex/codex-session")
 
-            status_files = list(logs_root.glob("**/status.json"))
+            status_files = list(logs_root.glob("**/*-launcher/status.json"))
             self.assertTrue(status_files)
             latest_status = json.loads(sorted(status_files)[-1].read_text(encoding="utf-8"))
             self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/mindex/pull/1")

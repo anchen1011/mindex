@@ -37,6 +37,7 @@ This skill is for development work inside this repository only.
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
 - require Mindex-managed PR titles and bodies to describe the complete branch scope, not just the newest commit
 - treat automatic GitHub publication as the default completion path for each meaningful interaction, using a new branch/PR for new feature work and the existing PR only for true follow-up work on that branch
+- when multiple agents or parallel efforts are working toward different goals, keep each goal on its own branch and PR instead of mixing them together
 - never allow Mindex-managed behavior to push directly to `main`, `master`, `production`, or another person's branch
 
 ## Expected validation

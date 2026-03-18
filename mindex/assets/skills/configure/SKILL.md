@@ -19,6 +19,7 @@ that define Codex's future branch, fork, logging, and PR behavior.
 - install the packaged Mindex skills into `~/.codex/skills/` or the configured Codex home
 - keep the managed `[profiles.mindex]` block in the Codex config file up to date
 - record configure activity under `logs/`
+- ensure the managed instructions say that when multiple agents or parallel efforts pursue different goals, each goal must use its own branch and PR
 - ensure the managed instructions enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes to protected branches
 
 ## Workflow

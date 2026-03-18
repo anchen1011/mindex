@@ -26,6 +26,7 @@ for how Codex should work in this repository.
 - verify the PR exists on GitHub and capture its URL before considering publication complete
 - ensure the PR title and description cover the cumulative branch scope, including every commit in that PR
 - treat automatic GitHub publication as the default; create a new branch and PR for a new feature, and only keep adding to the current branch when the work is clearly a continuation of that branch's feature
+- when multiple agents or parallel efforts are working toward different goals, keep each goal on its own branch and PR instead of mixing them together
 - keep `logs/` local and uncommitted
 
 ## Typical workflow

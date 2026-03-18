@@ -39,10 +39,26 @@ def _assets_root() -> Path:
     return Path(__file__).resolve().parent / "assets" / "skills"
 
 
-def default_codex_home() -> Path:
-    configured = os.environ.get("CODEX_HOME")
+def default_mindex_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def default_logs_root(env: dict[str, str] | None = None) -> Path:
+    environ = env if env is not None else os.environ
+    configured = environ.get("MINDEX_LOGS_ROOT")
     if configured:
         return Path(configured).expanduser()
+    return default_mindex_root() / "logs"
+
+
+def default_codex_home(env: dict[str, str] | None = None) -> Path:
+    environ = env if env is not None else os.environ
+    configured = environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser()
+    home = environ.get("HOME")
+    if home:
+        return Path(home).expanduser() / ".codex"
     return Path.home() / ".codex"
 
 
@@ -75,6 +91,7 @@ operating policy for future repository work, not as a one-off task note.
 - Publish meaningful completed interactions to GitHub automatically by default.
 - Never push directly to `main`, `master`, `production`, or similarly protected release branches.
 - When work starts from a protected branch, create a fresh feature branch before any repository changes continue.
+- When multiple agents or parallel efforts pursue different goals, keep each goal on its own branch and PR instead of mixing them together.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
@@ -160,7 +177,7 @@ def configure_project(
     codex_config_path = (
         Path(codex_config_path).expanduser().resolve() if codex_config_path else (codex_home / "config.toml")
     )
-    logs_root = Path(logs_root).resolve() if logs_root else (project_root / "logs")
+    logs_root = Path(logs_root).resolve() if logs_root else default_logs_root().resolve()
     instructions_path = project_root / ".mindex" / "codex_instructions.md"
 
     log_run = create_log_run(
