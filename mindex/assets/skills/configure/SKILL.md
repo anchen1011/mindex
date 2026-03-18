@@ -21,7 +21,9 @@ Codex environment.
 
 - run `mindex configure --project-root <root>` from the repository root
 - make sure `.mindex/codex_instructions.md` is managed by Mindex
-- install the packaged Mindex skills into `~/.codex/skills/` or the configured Codex home
+- keep the default Mindex-managed Codex home under `.mindex/codex-home` so Mindex does not reuse vanilla `~/.codex`
+- install the packaged Mindex skills into `.mindex/codex-home/skills/` or the configured Codex home
+- link packaged skills back to the source tree when possible so editable-install skill edits take effect without another copy step
 - keep the managed `[profiles.mindex]` block in the Codex config file up to date
 - record configure activity under `logs/`
 - make it clear that `pip install` of Mindex installs the `mindex` command and applies the Mindex-managed setup by default unless auto-configure is disabled

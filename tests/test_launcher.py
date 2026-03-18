@@ -120,7 +120,7 @@ class LauncherTests(unittest.TestCase):
                 "import json, os, sys\n"
                 "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
                 "with open(path, 'w', encoding='utf-8') as handle:\n"
-                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
@@ -142,6 +142,7 @@ class LauncherTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
             self.assertEqual(payload["args"], ["status", "--json"])
+            self.assertEqual(payload["codex_home"], str((root / ".mindex" / "codex-home").resolve()))
 
             status_files = list(logs_root.glob("**/status.json"))
             self.assertEqual(len(status_files), 1)

@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 from typing import Iterable
 
+from mindex.codex_home import default_managed_codex_home, default_vanilla_codex_home
 from mindex.logging_utils import append_action, create_log_run, write_json, write_status
 
 
@@ -39,13 +40,6 @@ def _assets_root() -> Path:
     return Path(__file__).resolve().parent / "assets" / "skills"
 
 
-def default_codex_home() -> Path:
-    configured = os.environ.get("CODEX_HOME")
-    if configured:
-        return Path(configured).expanduser()
-    return Path.home() / ".codex"
-
-
 def build_dependency_commands(project_root: Path) -> list[str]:
     conda_exe = shutil.which("conda") or os.environ.get("CONDA_EXE") or "conda"
     return [
@@ -69,11 +63,15 @@ Installing Mindex through `pip install` prepares `mindex` as the
 Mindex-enhanced Codex entry point for this repository by default unless
 `MINDEX_SKIP_AUTO_CONFIGURE=1`.
 
+Mindex keeps its managed Codex home under `.mindex/codex-home` by default so
+plain `~/.codex` stays vanilla while Mindex loads its own managed skills.
+
 ## Operating rules
 
 - Run explicit tests for every meaningful change and record the results under `logs/`.
 - Keep the original `codex` command untouched; it remains the plain vanilla Codex command.
 - Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings for this repository.
+- Load Mindex-managed skills from `.mindex/codex-home/skills` instead of reusing `~/.codex/skills`.
 - If a user asks Codex to configure Mindex, apply the same managed instructions, packaged skills, and profile block to that Codex environment.
 - Publish meaningful AI-generated changes to GitHub instead of leaving them only on the local machine.
 - Use one branch per feature and one PR per feature.
@@ -100,7 +98,7 @@ Mindex-enhanced Codex entry point for this repository by default unless
 
 ## Repository reminders
 
-- `mindex configure` manages this file, packaged skills, and the Codex profile block.
+- `mindex configure` manages this file, the Mindex-managed Codex home, packaged skills, and the Codex profile block.
 - `logs/` is a local artifact; do not commit it.
 - Use the packaged `repo` skill when working on this repository and the packaged `configure` skill when setting up new environments.
 """
@@ -109,6 +107,7 @@ Mindex-enhanced Codex entry point for this repository by default unless
 def render_managed_profile_block(project_root: Path, instructions_path: Path) -> str:
     root_text = project_root.as_posix()
     instructions_text = instructions_path.as_posix()
+    managed_home_text = (project_root / ".mindex" / "codex-home").as_posix()
     return "\n".join(
         [
             MANAGED_BLOCK_START,
@@ -120,6 +119,7 @@ def render_managed_profile_block(project_root: Path, instructions_path: Path) ->
             f'cwd = "{root_text}"',
             "",
             "[profiles.mindex.env]",
+            f'CODEX_HOME = "{managed_home_text}"',
             f'MINDEX_PROJECT_ROOT = "{root_text}"',
             f'MINDEX_INSTRUCTIONS_FILE = "{instructions_text}"',
             MANAGED_BLOCK_END,
@@ -139,8 +139,41 @@ def upsert_managed_block(existing_text: str, managed_block: str) -> str:
     return existing_text + managed_block
 
 
-def copy_packaged_skills(destination_root: Path, *, dry_run: bool) -> list[str]:
+def _remove_existing_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def _bootstrap_managed_codex_home(*, source_home: Path, destination_home: Path, dry_run: bool) -> list[str]:
+    synced_entries: list[str] = []
+    if dry_run or not source_home.exists():
+        return synced_entries
+
+    destination_home.mkdir(parents=True, exist_ok=True)
+    for source_path in sorted(source_home.iterdir()):
+        if source_path.name in {"config.toml", "skills"}:
+            continue
+
+        destination_path = destination_home / source_path.name
+        if destination_path.exists() or destination_path.is_symlink():
+            continue
+
+        if source_path.is_symlink():
+            destination_path.symlink_to(source_path.resolve(), target_is_directory=source_path.is_dir())
+        elif source_path.is_dir():
+            shutil.copytree(source_path, destination_path, symlinks=True)
+        else:
+            shutil.copy2(source_path, destination_path)
+        synced_entries.append(source_path.name)
+    return synced_entries
+
+
+def install_packaged_skills(destination_root: Path, *, dry_run: bool) -> tuple[list[str], str]:
     installed: list[str] = []
+    install_mode = "symlink"
     source_root = _assets_root()
     for source_dir in sorted(path for path in source_root.iterdir() if path.is_dir()):
         target_dir = destination_root / source_dir.name
@@ -148,10 +181,14 @@ def copy_packaged_skills(destination_root: Path, *, dry_run: bool) -> list[str]:
         if dry_run:
             continue
         destination_root.mkdir(parents=True, exist_ok=True)
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        shutil.copytree(source_dir, target_dir)
-    return installed
+        if target_dir.exists() or target_dir.is_symlink():
+            _remove_existing_path(target_dir)
+        try:
+            target_dir.symlink_to(source_dir.resolve(), target_is_directory=True)
+        except OSError:
+            shutil.copytree(source_dir, target_dir)
+            install_mode = "copy"
+    return installed, install_mode
 
 
 def configure_project(
@@ -163,7 +200,11 @@ def configure_project(
     dry_run: bool = False,
 ) -> ConfigureResult:
     project_root = Path(project_root).resolve()
-    codex_home = Path(codex_home).expanduser().resolve() if codex_home else default_codex_home().resolve()
+    codex_home = (
+        Path(codex_home).expanduser().resolve()
+        if codex_home
+        else default_managed_codex_home(project_root)
+    )
     codex_config_path = (
         Path(codex_config_path).expanduser().resolve() if codex_config_path else (codex_home / "config.toml")
     )
@@ -186,14 +227,24 @@ def configure_project(
         append_action(log_run, f"Prepare instructions path: {instructions_path}")
         append_action(log_run, f"Prepare Codex home: {codex_home}")
         append_action(log_run, f"Prepare Codex config: {codex_config_path}")
+        vanilla_codex_home = default_vanilla_codex_home()
+        append_action(log_run, f"Vanilla Codex home: {vanilla_codex_home}")
 
         dependency_commands = build_dependency_commands(project_root)
         for command in dependency_commands:
             append_action(log_run, f"Dependency command: {command}")
 
+        synced_entries = _bootstrap_managed_codex_home(
+            source_home=vanilla_codex_home,
+            destination_home=codex_home,
+            dry_run=dry_run,
+        )
+        if synced_entries:
+            append_action(log_run, f"Bootstrap unmanaged Codex home entries: {', '.join(synced_entries)}")
+
         skills_root = codex_home / "skills"
-        installed_skills = copy_packaged_skills(skills_root, dry_run=dry_run)
-        append_action(log_run, f"Packaged skills: {', '.join(installed_skills)}")
+        installed_skills, skill_install_mode = install_packaged_skills(skills_root, dry_run=dry_run)
+        append_action(log_run, f"Packaged skills ({skill_install_mode}): {', '.join(installed_skills)}")
 
         instructions_text = render_instructions(project_root)
         managed_block = render_managed_profile_block(project_root, instructions_path)
@@ -211,6 +262,7 @@ def configure_project(
             "codex_config_path": str(codex_config_path),
             "skills_root": str(skills_root),
             "packaged_skills": installed_skills,
+            "skill_install_mode": skill_install_mode,
             "dependency_commands": dependency_commands,
             "dry_run": dry_run,
         }

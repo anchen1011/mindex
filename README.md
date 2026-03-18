@@ -42,7 +42,12 @@ Implemented behavior:
   for this repository by writing the managed instructions, packaged skills, and
   profile settings described here
 - writes project instructions into `.mindex/codex_instructions.md`
-- installs packaged skills into `~/.codex/skills/` or a provided Codex home
+- keeps a separate Mindex-managed Codex home under `.mindex/codex-home` by
+  default instead of reusing `~/.codex`
+- installs packaged skills into `.mindex/codex-home/skills/` or a provided
+  Codex home
+- symlinks packaged skills back to the source tree when possible so editable
+  installs pick up skill edits from the repo immediately
 - writes a managed `[profiles.mindex]` block into the Codex config file
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
@@ -109,6 +114,8 @@ Current implementation:
 - the package exposes `mindex` as a console script and intended enhanced Codex
   entry point for this repository
 - `mindex configure ...` runs the configure workflow
+- `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
+  `.mindex/codex-home` by default
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
   URL on GitHub

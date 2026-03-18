@@ -36,6 +36,16 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("configure", plan["packaged_skills"])
             self.assertIn("repo", plan["packaged_skills"])
 
+    def test_configure_defaults_to_project_local_managed_codex_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            root.mkdir()
+            self._create_repo(root)
+
+            result = configure_project(project_root=root, dry_run=True)
+
+            self.assertEqual(result.codex_home, (root / ".mindex" / "codex-home").resolve())
+
     def test_configure_writes_instructions_skills_and_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -50,7 +60,9 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("Mindex Codex Instructions", instructions_text)
             self.assertIn("Mindex is a project-specific Codex wrapper", instructions_text)
             self.assertIn("Installing Mindex through `pip install` prepares `mindex`", instructions_text)
+            self.assertIn("Mindex keeps its managed Codex home under `.mindex/codex-home`", instructions_text)
             self.assertIn("plain vanilla Codex command", instructions_text)
+            self.assertIn("Load Mindex-managed skills from `.mindex/codex-home/skills`", instructions_text)
             self.assertIn("If a user asks Codex to configure Mindex", instructions_text)
             self.assertIn("Use one branch per feature and one PR per feature.", instructions_text)
             self.assertIn("Never push directly to `main`, `master`, `production`", instructions_text)
@@ -58,7 +70,10 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", instructions_text)
             self.assertTrue((codex_home / "skills" / "configure" / "SKILL.md").exists())
             self.assertTrue((codex_home / "skills" / "repo" / "SKILL.md").exists())
+            self.assertTrue((codex_home / "skills" / "configure").is_symlink())
+            self.assertTrue((codex_home / "skills" / "repo").is_symlink())
             self.assertIn("[profiles.mindex]", config_text)
+            self.assertIn('CODEX_HOME = "', config_text)
             self.assertIn("MINDEX_INSTRUCTIONS_FILE", config_text)
 
     def test_module_cli_supports_dry_run(self) -> None:
