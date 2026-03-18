@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from mindex.cli import main as cli_main
 from mindex.task_queue import AgentManager, TaskQueueManager
@@ -156,6 +157,32 @@ class UiTests(unittest.TestCase):
             payload = json.loads(stdout_buffer.getvalue())
             self.assertEqual(payload["project_root"], str(root.resolve()))
             self.assertEqual(payload["username"], "admin")
+
+    def test_cli_prompts_for_ui_password_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            stdout_buffer = io.StringIO()
+
+            with mock.patch("mindex.ui.getpass.getpass", side_effect=["deck-secret", "deck-secret"]):
+                with redirect_stdout(stdout_buffer):
+                    result = cli_main(
+                        [
+                            "ui",
+                            "init-config",
+                            "--project-root",
+                            str(root),
+                        ]
+                    )
+
+            self.assertEqual(result, 0)
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["project_root"], str(root.resolve()))
+            self.assertEqual(payload["username"], "admin")
+            config_path = root / ".mindex" / "ui_config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertNotIn("password", config["auth"])
+            self.assertIn("password_hash", config["auth"])
 
 
 if __name__ == "__main__":

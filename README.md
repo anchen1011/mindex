@@ -215,6 +215,8 @@ Implemented behavior:
 
 - creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
   hash instead of storing a plaintext password
+- keeps the default UI username as `admin` and prompts `mindex ui init-config`
+  for the password when `--password` is not supplied
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
 - serves a responsive control deck for authentication, recent Mindex activity,
