@@ -121,6 +121,24 @@
 - Ensure the generated Pull Request metadata is refreshed from the complete
   branch scope rather than only the newest commit.
 
+#### 6. Frontend Session Director
+
+- Status: implemented
+- Add a browser-based frontend that lets a user manage multiple MindX task
+  queues as separate sessions.
+- Support adding, deleting, editing, and reordering tasks inside each queue.
+- Require tasks to be completed in order so MindX always advances through the
+  next pending instruction.
+- Persist queue state across restarts.
+- Keep a permanent log for each queue so completed sessions and checked-off
+  tasks remain reviewable.
+- Run the frontend on configurable settings, defaulting to host `0.0.0.0` and
+  port `8000`.
+- Launch the frontend through a simple `mindex ui` command.
+- Store the frontend host, port, username, password, and storage paths in a
+  config file.
+- Protect access with config-driven authentication credentials.
+
 ### Notes
 
 - This file is being maintained as the current project history and requirement

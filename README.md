@@ -17,6 +17,7 @@ The repository currently includes:
 - structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
+- a password-protected frontend for persistent MindX task-session queues
 
 The repository now has an initial implementation for the core runtime features
 below, with additional hardening and integration work still in progress.
@@ -157,6 +158,33 @@ The repo skill is intended to:
 - reinforce testing, logging, GitHub publication, and PR requirements when
   working in this repo
 
+### 7. Frontend session director
+
+Mindex now includes a built-in frontend for managing ordered task queues that
+represent individual MindX sessions.
+
+Current commands:
+
+- `mindex ui`
+- `mindex ui --init-only`
+
+Implemented behavior:
+
+- creates a managed UI config file at `.mindex/ui_config.json` on first use
+- reads the web host, port, username, password, and storage paths from that
+  config file
+- defaults to host `0.0.0.0`, port `8000`, username `admin`, and password
+  `123456`
+- serves a password-protected browser interface for creating queues and
+  editing queue metadata
+- supports adding, updating, deleting, and reordering tasks within each queue
+- enforces one-by-one task completion so MindX always advances through the
+  next pending instruction in order
+- persists active session state in `.mindex/task_queues.json`
+- appends a permanent per-queue event log under `.mindex/queue_logs/` so
+  completed sessions remain reviewable after tasks are checked off
+- records UI server launches under `logs/`
+
 ## Project rules
 
 ### Testing first
@@ -211,7 +239,8 @@ The repo skill is intended to:
 - `HISTORY.md` - tracked requirements and status
 - `logs/` - structured local execution, validation, and policy logs
 - `mindex/` - Python package for configure, logging, install hooks, skills,
-  and launcher code that wraps Codex with project policy
+  launcher code, task queue persistence, and the frontend UI server that wraps
+  Codex with project policy
 - `tests/` - automated validation for the package behavior
 - `setup.py` - packaging plus editable-install hook entry
 
@@ -222,11 +251,13 @@ Current automated validation includes:
 - `python3 -m unittest discover -s tests -v`
 - editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 pip install -e .`
 - dry-run configure validation through the installed `mindex` command
+- UI bootstrap validation with `mindex ui --init-only`
 - publish workflow validation with fake GitHub CLI responses and local Git
   remotes
 
 ## Development note
 
 The implementation work for the configure skill, runtime logging, repo skill,
-and `mindex` launcher is now started in-repo and will continue through the
-project's PR-based workflow until the remaining integration gaps are closed.
+frontend session director, and `mindex` launcher is now started in-repo and
+will continue through the project's PR-based workflow until the remaining
+integration gaps are closed.

@@ -7,6 +7,7 @@ from mindex import __version__
 from mindex.configure import main as configure_main
 from mindex.github_workflow import main as github_workflow_main
 from mindex.launcher import find_project_root, launch_codex
+from mindex.ui import main as ui_main
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -19,6 +20,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     if args[0] == "configure":
         return configure_main(args)
+    if args[0] == "ui":
+        return ui_main(args[1:], project_root=project_root)
     if args[0] == "publish-pr":
         publish_args = list(args[1:])
         if "--project-root" not in publish_args:
