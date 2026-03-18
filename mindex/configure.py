@@ -75,6 +75,7 @@ operating policy for future repository work, not as a one-off task note.
 - Never push directly to `main`, `master`, `production`, or similarly protected release branches.
 - When work starts from a protected branch, create a fresh feature branch before any repository changes continue.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
+- Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
 - Treat `README.md` updates as part of feature completion when the workflow changes.
 

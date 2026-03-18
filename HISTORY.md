@@ -49,6 +49,8 @@
   branch, create a fresh feature branch before continuing.
 - Publication is not complete until the Pull Request is verified on GitHub and
   its URL is captured.
+- Pull Request titles and descriptions must represent the full scope of the
+  branch, including all commits included in that Pull Request.
 - Never push directly to `main`, `master`, `production`, or another shared
   release branch.
 - Never touch another person's existing branch unless the user explicitly
@@ -116,6 +118,8 @@
   the owner of the upstream repository.
 - Verify that each Pull Request can be located on GitHub before treating the
   publication workflow as complete.
+- Ensure the generated Pull Request metadata is refreshed from the complete
+  branch scope rather than only the newest commit.
 
 ### Notes
 

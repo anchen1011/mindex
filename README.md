@@ -97,6 +97,9 @@ Current implementation:
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
   URL on GitHub
+- `mindex publish-pr ...` regenerates the PR title/body from the full branch
+  scope so the PR reflects every commit included in that branch, not just the
+  latest change
 - other `mindex ...` invocations proxy to `codex` from the repo root
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
@@ -128,8 +131,10 @@ Implemented behavior:
 - prefers a fork remote for non-personal repositories when the authenticated
   GitHub user is not the upstream owner
 - stages and commits the current work when the working tree is dirty
-- pushes the feature branch, creates the pull request, and verifies that the
-  PR can be located on GitHub
+- pushes the feature branch, creates or updates the pull request, and verifies
+  that the PR can be located on GitHub
+- regenerates the PR description from all commits and changed files on the
+  branch so the published PR matches the full feature scope
 - records publication metadata, command output, and PR verification details
   under `logs/`
 
@@ -180,6 +185,8 @@ The repo skill is intended to:
   repository without touching anyone else's branch
 - publication is not complete until the PR is verified on GitHub and its URL is
   captured
+- the PR title and body must describe the cumulative scope of the branch, not
+  only the most recent commit
 - never push directly to `main`, `master`, `production`, or another protected
   release branch
 - never work on or overwrite another person's branch unless the user explicitly

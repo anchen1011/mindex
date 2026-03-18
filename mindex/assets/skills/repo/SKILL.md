@@ -24,6 +24,7 @@ for how Codex should work in this repository.
 - if work starts from a protected branch, create a fresh feature branch before continuing
 - never touch another person's branch unless the user explicitly asks
 - verify the PR exists on GitHub and capture its URL before considering publication complete
+- ensure the PR title and description cover the cumulative branch scope, including every commit in that PR
 - keep `logs/` local and uncommitted
 
 ## Typical workflow

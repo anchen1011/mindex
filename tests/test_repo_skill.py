@@ -48,7 +48,10 @@ class RepoSkillTests(unittest.TestCase):
         self.assertIn("prefer a fork owned by the user", repo_text)
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
-        self.assertIn("enforce feature branches, PR-first work, PR URL verification, and no direct pushes", configure_text)
+        self.assertIn(
+            "enforce feature branches, PR-first work, full-branch PR descriptions, PR URL verification, and no direct pushes",
+            configure_text,
+        )
         self.assertIn("describe Mindex as a Codex wrapper", configure_text)
 
 

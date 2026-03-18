@@ -35,6 +35,7 @@ This skill is for development work inside this repository only.
 - treat branch-per-feature and PR-first development as the default workflow
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
+- require Mindex-managed PR titles and bodies to describe the complete branch scope, not just the newest commit
 - never allow Mindex-managed behavior to push directly to `main`, `master`, `production`, or another person's branch
 
 ## Expected validation

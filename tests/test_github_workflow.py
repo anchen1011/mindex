@@ -62,6 +62,7 @@ class GitHubWorkflowTests(unittest.TestCase):
             "    base = args[args.index('--base') + 1]\n"
             "    head = args[args.index('--head') + 1]\n"
             "    title = args[args.index('--title') + 1]\n"
+            "    body = args[args.index('--body') + 1]\n"
             "    branch = head.split(':', 1)[-1]\n"
             "    url = state['repo_url'] + '/pull/1'\n"
             "    payload = {\n"
@@ -69,6 +70,7 @@ class GitHubWorkflowTests(unittest.TestCase):
             "        'url': url,\n"
             "        'state': 'OPEN',\n"
             "        'title': title,\n"
+            "        'body': body,\n"
             "        'headRefName': branch,\n"
             "        'baseRefName': base,\n"
             "    }\n"
@@ -78,6 +80,15 @@ class GitHubWorkflowTests(unittest.TestCase):
             "    }\n"
             "    write_state()\n"
             "    print(url)\n"
+            "elif args[:2] == ['pr', 'edit']:\n"
+            "    pr = state.get('pr')\n"
+            "    if not pr:\n"
+            "        print('missing pr', file=sys.stderr)\n"
+            "        sys.exit(1)\n"
+            "    pr['payload']['title'] = args[args.index('--title') + 1]\n"
+            "    pr['payload']['body'] = args[args.index('--body') + 1]\n"
+            "    write_state()\n"
+            "    print(pr['payload']['url'])\n"
             "elif args[:2] == ['pr', 'view']:\n"
             "    pr = state.get('pr')\n"
             "    if not pr:\n"
@@ -119,24 +130,30 @@ class GitHubWorkflowTests(unittest.TestCase):
             )
 
             (root / "feature.txt").write_text("automated PR publication\n", encoding="utf-8")
+            self._run(["git", "checkout", "-b", "mindex/feature-scope"], cwd=root)
+            self._run(["git", "add", "feature.txt"], cwd=root)
+            self._run(["git", "commit", "-m", "Add GitHub publication helpers"], cwd=root)
+
+            (root / "README.md").write_text("# repo\n\nUpdated workflow docs.\n", encoding="utf-8")
             env = dict(os.environ)
             env["PATH"] = f"{bin_dir}:{env['PATH']}"
             env["FAKE_GH_STATE"] = str(state_path)
 
             result = publish_pull_request(
                 project_root=root,
-                commit_message="Automate GitHub publication",
-                title="Automate GitHub publication",
-                body="Adds automated branch, push, and PR verification.",
+                commit_message="Document cumulative PR scope handling",
+                title="Document cumulative PR scope handling",
+                body="Make sure the PR description reflects the entire feature branch.",
                 env=env,
             )
 
-            self.assertTrue(result.branch_name.startswith("mindex/automate-github-publication"))
+            self.assertEqual(result.branch_name, "mindex/feature-scope")
             self.assertEqual(result.base_branch, "main")
             self.assertEqual(result.push_remote, "origin")
             self.assertFalse(result.used_fork)
             self.assertTrue(result.commit_created)
             self.assertEqual(result.pr_number, 1)
+            self.assertEqual(result.pr_title, "Feature Scope")
             self.assertEqual(result.pr_url, "https://github.com/anchen1011/mindex/pull/1")
             self.assertEqual(result.pr_state, "OPEN")
             self.assertTrue(result.log_dir.is_dir())
@@ -148,10 +165,17 @@ class GitHubWorkflowTests(unittest.TestCase):
 
             status_payload = json.loads((result.log_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status_payload["status"], "success")
+            self.assertEqual(status_payload["pr_title"], result.pr_title)
             self.assertEqual(status_payload["pr_url"], result.pr_url)
 
             gh_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(gh_state["pr"]["payload"]["headRefName"], result.branch_name)
+            self.assertEqual(gh_state["pr"]["payload"]["title"], "Feature Scope")
+            self.assertIn("Add GitHub publication helpers", gh_state["pr"]["payload"]["body"])
+            self.assertIn("Document cumulative PR scope handling", gh_state["pr"]["payload"]["body"])
+            self.assertIn("`README.md`", gh_state["pr"]["payload"]["body"])
+            self.assertIn("`feature.txt`", gh_state["pr"]["payload"]["body"])
+            self.assertIn("Make sure the PR description reflects the entire feature branch.", gh_state["pr"]["payload"]["body"])
 
 
 if __name__ == "__main__":
