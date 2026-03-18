@@ -30,7 +30,7 @@ class RepoSkillTests(unittest.TestCase):
     def test_packaged_skills_have_frontmatter(self) -> None:
         skills_root = Path(__file__).resolve().parents[1] / "mindex" / "assets" / "skills"
 
-        for skill_name in ("repo", "configure"):
+        for skill_name in ("repo", "configure", "multi-agent"):
             text = (skills_root / skill_name / "SKILL.md").read_text(encoding="utf-8")
             self.assertTrue(text.startswith("---\n"))
             self.assertIn(f"name: {skill_name}", text)
@@ -41,18 +41,31 @@ class RepoSkillTests(unittest.TestCase):
 
         repo_text = (skills_root / "repo" / "SKILL.md").read_text(encoding="utf-8")
         configure_text = (skills_root / "configure" / "SKILL.md").read_text(encoding="utf-8")
+        multi_agent_text = (skills_root / "multi-agent" / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("Mindex is a Codex wrapper", repo_text)
         self.assertIn("publish meaningful work to GitHub through a PR workflow", repo_text)
         self.assertIn("avoid direct work on `main`, `master`, `production`", repo_text)
+        self.assertIn("commit", repo_text)
         self.assertIn("prefer a fork owned by the user", repo_text)
+        self.assertIn("use the packaged `multi-agent` skill", repo_text)
+        self.assertIn("do not wait for the user to mention branches or PRs", repo_text)
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
         self.assertIn(
             "enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes",
             configure_text,
         )
+        self.assertIn("commit the work", configure_text)
         self.assertIn("describe Mindex as a Codex wrapper", configure_text)
+        self.assertIn("including the multi-agent coordination skill", configure_text)
+        self.assertIn("separate branches and PRs by default", configure_text)
+
+        self.assertIn("Mindex is a Codex wrapper", multi_agent_text)
+        self.assertIn("one goal, feature branch, and PR", multi_agent_text)
+        self.assertIn("did not explicitly mention branches", multi_agent_text)
+        self.assertIn("pull\nrequests", multi_agent_text)
+        self.assertIn("never let two agents share the same in-flight branch", multi_agent_text)
 
 
 if __name__ == "__main__":

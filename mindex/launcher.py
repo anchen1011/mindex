@@ -54,15 +54,24 @@ def launch_codex(
 
     try:
         requested_branch = run_env.get("MINDEX_FEATURE_BRANCH")
+        requested_summary = run_env.get("MINDEX_AGENT_GOAL") or requested_branch or "codex-session"
         active_branch = ensure_feature_branch(
             launch_root,
-            summary=requested_branch or "codex-session",
+            summary=requested_summary,
             branch_name=requested_branch,
             env=run_env,
             log_run=log_run,
         )
         if active_branch:
             append_action(log_run, f"Active feature branch: {active_branch}")
+            if run_env.get("MINDEX_MULTI_AGENT") == "1" or run_env.get("MINDEX_AGENT_ID"):
+                append_action(
+                    log_run,
+                    "Multi-agent launch context: "
+                    f"agent_id={run_env.get('MINDEX_AGENT_ID', '').strip() or 'n/a'}, "
+                    f"agent_name={run_env.get('MINDEX_AGENT_NAME', '').strip() or 'n/a'}, "
+                    f"goal={run_env.get('MINDEX_AGENT_GOAL', '').strip() or requested_summary}",
+                )
     except WorkflowError as exc:
         append_action(log_run, f"Feature branch automation skipped: {exc}")
 

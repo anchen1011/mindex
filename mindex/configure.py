@@ -71,11 +71,18 @@ operating policy for future repository work, not as a one-off task note.
 - Keep the original `codex` command untouched; use `mindex` for repo-specific workflows.
 - Publish meaningful AI-generated changes to GitHub instead of leaving them only on the local machine.
 - Use one branch per feature and one PR per feature.
+- Create a fresh feature branch for new feature work and make the corresponding commit before publication.
 - Do not bundle multiple independent features into a single branch or PR.
+- When multiple coding agents work in the same repository, assign each agent
+  one goal, one branch, and one PR by default.
+- Treat that branch and PR isolation as the default even when the user did not
+  explicitly ask about repository workflow details.
 - Publish meaningful completed interactions to GitHub automatically by default.
 - Never push directly to `main`, `master`, `production`, or similarly protected release branches.
 - When work starts from a protected branch, create a fresh feature branch before any repository changes continue.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
+- Never let two agents share the same in-flight feature branch unless the user
+  explicitly requests joint work on that branch.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
 - Treat `README.md` updates as part of feature completion when the workflow changes.
@@ -88,6 +95,8 @@ operating policy for future repository work, not as a one-off task note.
 - If forking is not possible, create a new feature branch in the organization repository and keep clear ownership boundaries.
 - Never work on `main`, `master`, `production`, or any other shared release branch as the source branch for a feature.
 - Never reuse an unrelated in-flight feature branch for a new task.
+- When several Mindex-managed agents are active in the same repository, use a
+  distinct branch and PR for each independent goal.
 - Only continue on an existing feature branch when the new interaction is clearly follow-up work for that same feature; otherwise create a new feature branch and PR.
 - Use `mindex publish-pr` to automate branch creation when needed, commit the work, push it, create the PR, and verify the PR URL.
 
@@ -95,7 +104,9 @@ operating policy for future repository work, not as a one-off task note.
 
 - `mindex configure` manages this file, packaged skills, and the Codex profile block.
 - `logs/` is a local artifact; do not commit it.
-- Use the packaged `repo` skill when working on this repository and the packaged `configure` skill when setting up new environments.
+- Use the packaged `repo` skill when working on this repository, the packaged
+  `configure` skill when setting up new environments, and the packaged
+  `multi-agent` skill when coordinating several agents in one repository.
 """
 
 

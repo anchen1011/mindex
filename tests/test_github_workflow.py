@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from mindex.github_workflow import publish_pull_request
+from mindex.github_workflow import ensure_feature_branch, publish_pull_request
 
 
 class GitHubWorkflowTests(unittest.TestCase):
@@ -176,6 +176,88 @@ class GitHubWorkflowTests(unittest.TestCase):
             self.assertIn("`README.md`", gh_state["pr"]["payload"]["body"])
             self.assertIn("`feature.txt`", gh_state["pr"]["payload"]["body"])
             self.assertIn("Make sure the PR description reflects the entire feature branch.", gh_state["pr"]["payload"]["body"])
+
+    def test_publish_pull_request_isolates_multi_agent_work_on_a_distinct_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            remote_root = Path(tmpdir) / "remote.git"
+            bin_dir = Path(tmpdir) / "bin"
+            state_path = Path(tmpdir) / "fake-gh-state.json"
+            root.mkdir()
+            bin_dir.mkdir()
+            self._init_repo(root, remote_root)
+
+            fake_gh = bin_dir / "gh"
+            self._write_fake_gh(fake_gh)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "viewer_login": "anchen1011",
+                        "repo_name_with_owner": "anchen1011/mindex",
+                        "repo_owner": "anchen1011",
+                        "repo_url": "https://github.com/anchen1011/mindex",
+                        "default_branch": "main",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            self._run(["git", "checkout", "-b", "mindex/existing-feature"], cwd=root)
+            (root / "feature.txt").write_text("parallel work\n", encoding="utf-8")
+
+            env = dict(os.environ)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["FAKE_GH_STATE"] = str(state_path)
+            env["MINDEX_MULTI_AGENT"] = "1"
+            env["MINDEX_AGENT_ID"] = "agent-42"
+            env["MINDEX_AGENT_NAME"] = "Docs Agent"
+            env["MINDEX_AGENT_GOAL"] = "Document parallel publication"
+
+            result = publish_pull_request(
+                project_root=root,
+                commit_message="Document parallel publication",
+                title="Document parallel publication",
+                body="Keep this agent's branch separate from the existing feature branch.",
+                env=env,
+            )
+
+            self.assertNotEqual(result.branch_name, "mindex/existing-feature")
+            self.assertTrue(result.branch_name.startswith("mindex/document-parallel-publication"))
+            self.assertIn("docs-agent", result.branch_name)
+            self.assertEqual(result.pr_url, "https://github.com/anchen1011/mindex/pull/1")
+
+            registry = json.loads((root / ".mindex" / "agent-branches.json").read_text(encoding="utf-8"))
+            branch_metadata = registry["branches"][result.branch_name]
+            self.assertEqual(branch_metadata["agent_id"], "agent-42")
+            self.assertEqual(branch_metadata["agent_name"], "Docs Agent")
+            self.assertEqual(branch_metadata["goal"], "Document parallel publication")
+
+            gh_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(gh_state["pr"]["payload"]["headRefName"], result.branch_name)
+
+    def test_ensure_feature_branch_reuses_same_agent_branch_but_not_other_feature_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            remote_root = Path(tmpdir) / "remote.git"
+            root.mkdir()
+            self._init_repo(root, remote_root)
+
+            self._run(["git", "checkout", "-b", "mindex/existing-feature"], cwd=root)
+            env = {
+                "MINDEX_MULTI_AGENT": "1",
+                "MINDEX_AGENT_ID": "agent-11",
+                "MINDEX_AGENT_NAME": "Review Agent",
+                "MINDEX_AGENT_GOAL": "Review release notes",
+            }
+
+            first_branch = ensure_feature_branch(root, summary="review-release-notes", env=env)
+            self.assertNotEqual(first_branch, "mindex/existing-feature")
+            self.assertIn("review-agent", first_branch or "")
+
+            second_branch = ensure_feature_branch(root, summary="review-release-notes", env=env)
+            self.assertEqual(second_branch, first_branch)
 
 
 if __name__ == "__main__":

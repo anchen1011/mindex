@@ -34,6 +34,7 @@ class ConfigureTests(unittest.TestCase):
             plan = json.loads((result.log_dir / "configure_plan.json").read_text(encoding="utf-8"))
             self.assertTrue(plan["dry_run"])
             self.assertIn("configure", plan["packaged_skills"])
+            self.assertIn("multi-agent", plan["packaged_skills"])
             self.assertIn("repo", plan["packaged_skills"])
 
     def test_configure_writes_instructions_skills_and_config(self) -> None:
@@ -50,9 +51,12 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("Mindex Codex Instructions", instructions_text)
             self.assertIn("Mindex is a project-specific Codex wrapper", instructions_text)
             self.assertIn("Use one branch per feature and one PR per feature.", instructions_text)
+            self.assertIn("assign each agent", instructions_text)
+            self.assertIn("Treat that branch and PR isolation as the default", instructions_text)
             self.assertIn("Never push directly to `main`, `master`, `production`", instructions_text)
             self.assertIn("fork it to the user's own GitHub account whenever possible", instructions_text)
             self.assertTrue((codex_home / "skills" / "configure" / "SKILL.md").exists())
+            self.assertTrue((codex_home / "skills" / "multi-agent" / "SKILL.md").exists())
             self.assertTrue((codex_home / "skills" / "repo" / "SKILL.md").exists())
             self.assertIn("[profiles.mindex]", config_text)
             self.assertIn("MINDEX_INSTRUCTIONS_FILE", config_text)
