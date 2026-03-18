@@ -82,6 +82,7 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("If a user asks Codex to configure Mindex", instructions_text)
             self.assertIn("Use one branch per feature and one PR per feature.", instructions_text)
             self.assertIn("Never push directly to `main`, `master`, `production`", instructions_text)
+            self.assertIn("multiple agents or parallel efforts pursue different goals", instructions_text)
             self.assertIn("fork it to the user's own GitHub account whenever possible", instructions_text)
             self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", instructions_text)
             self.assertEqual(result.instructions_path, codex_home / "mindex_instructions.md")

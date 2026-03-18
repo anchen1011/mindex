@@ -230,6 +230,9 @@ The repo skill is intended to:
   interaction; starting from a protected branch should create a new feature
   branch and PR, while follow-up work on the same feature branch should update
   that branch's existing PR
+- when multiple agents or parallel efforts are pursuing different goals, each
+  goal should use its own branch and its own PR instead of being combined into
+  one branch or one PR
 - that automatic branch-and-PR publication behavior is still the default even
   when the user only asks for code, docs, tests, or behavior changes and does
   not explicitly mention repo workflow, Git, GitHub, branches, or PRs

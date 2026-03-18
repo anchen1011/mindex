@@ -87,6 +87,7 @@ globally across workspaces.
 - Publish meaningful completed interactions to GitHub automatically by default.
 - Never push directly to `main`, `master`, `production`, or similarly protected release branches.
 - When work starts from a protected branch, create a fresh feature branch before any repository changes continue.
+- When multiple agents or parallel efforts pursue different goals, keep each goal on its own branch and PR instead of mixing them together.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.

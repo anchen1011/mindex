@@ -27,6 +27,7 @@ that Codex environment.
 - link packaged skills back to the source tree when possible so editable-install skill edits take effect without another copy step
 - keep the managed `[profiles.mindex]` block in the Codex config file up to date
 - record configure activity under `logs/`
+- ensure the managed instructions say that when multiple agents or parallel efforts pursue different goals, each goal must use its own branch and PR
 - make it clear that `pip install` of Mindex installs the `mindex` command and applies the Mindex-managed setup by default unless auto-configure is disabled
 - keep plain `codex` unchanged by default, but if the user asks Codex to configure Mindex, apply the same managed instructions, packaged skills, and Mindex profile to that Codex environment across projects
 - ensure the managed instructions enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes to protected branches
