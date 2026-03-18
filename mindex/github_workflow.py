@@ -454,6 +454,31 @@ def _verify_pull_request(
     )
 
 
+def _update_pull_request_metadata(
+    project_root: Path,
+    *,
+    repository: str,
+    pr_number: int,
+    title: str,
+    body: str,
+    env: dict[str, str] | None = None,
+    log_run=None,
+) -> None:
+    _gh(
+        project_root,
+        "api",
+        f"repos/{repository}/pulls/{pr_number}",
+        "--method",
+        "PATCH",
+        "-f",
+        f"title={title}",
+        "-f",
+        f"body={body}",
+        env=env,
+        log_run=log_run,
+    )
+
+
 def publish_pull_request(
     *,
     project_root: Path | str,
@@ -540,15 +565,12 @@ def publish_pull_request(
             log_run=log_run,
         )
         if existing_pr is not None:
-            _gh(
+            _update_pull_request_metadata(
                 resolved_root,
-                "pr",
-                "edit",
-                existing_pr.url,
-                "--title",
-                pr_title,
-                "--body",
-                pr_body,
+                repository=active_context.repo_name_with_owner,
+                pr_number=existing_pr.number,
+                title=pr_title,
+                body=pr_body,
                 env=env,
                 log_run=log_run,
             )
@@ -580,30 +602,25 @@ def publish_pull_request(
                 if existing_pr is None:
                     message = create_completed.stderr.strip() or create_completed.stdout.strip() or "gh pr create failed"
                     raise WorkflowError(message)
-                _gh(
+                _update_pull_request_metadata(
                     resolved_root,
-                    "pr",
-                    "edit",
-                    existing_pr.url,
-                    "--title",
-                    pr_title,
-                    "--body",
-                    pr_body,
+                    repository=active_context.repo_name_with_owner,
+                    pr_number=existing_pr.number,
+                    title=pr_title,
+                    body=pr_body,
                     env=env,
                     log_run=log_run,
                 )
                 pr_info = _verify_pull_request(resolved_root, pr_reference=existing_pr.url, env=env, log_run=log_run)
             else:
                 pr_url = create_completed.stdout.strip().splitlines()[-1].strip()
-                _gh(
+                pr_info = _verify_pull_request(resolved_root, pr_reference=pr_url, env=env, log_run=log_run)
+                _update_pull_request_metadata(
                     resolved_root,
-                    "pr",
-                    "edit",
-                    pr_url,
-                    "--title",
-                    pr_title,
-                    "--body",
-                    pr_body,
+                    repository=active_context.repo_name_with_owner,
+                    pr_number=pr_info.number,
+                    title=pr_title,
+                    body=pr_body,
                     env=env,
                     log_run=log_run,
                 )
