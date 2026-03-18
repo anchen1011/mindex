@@ -346,7 +346,6 @@ class MindexUiApp:
         self.config = config
         self.store = StateStore(config.state_file)
         self.task_queue_manager = TaskQueueManager(project_root=config.project_root, store=self.store)
-        self.task_queue_manager.ensure_default_queue()
         self.agent_manager = AgentManager(project_root=config.project_root, queue_log_dir=config.queue_log_dir, store=self.store)
         self.login_protector = LoginProtector(
             attempts=config.login_attempts,
@@ -361,6 +360,77 @@ class MindexUiApp:
 
     def create_session(self) -> SessionRecord:
         return self.sessions.create(self.config.username)
+
+    def create_managed_session(
+        self,
+        *,
+        name: str,
+        command_args: list[str],
+        workdir: Path | str,
+        queue_description: str = "",
+    ) -> dict[str, Any]:
+        queue = self.task_queue_manager.create_queue(
+            name=name,
+            description=queue_description or f"Queue for {name.strip() or 'this session'}.",
+        )
+        try:
+            agent = self.agent_manager.create_agent(
+                name=name,
+                description=queue_description,
+                command_args=command_args,
+                workdir=workdir,
+                queue_id=queue.queue_id,
+            )
+        except Exception:
+            self.task_queue_manager.delete_queue(queue.queue_id)
+            raise
+        return self._session_payload(agent, queue)
+
+    def delete_managed_session(self, agent_id: str) -> None:
+        agent = self.agent_manager.get_agent(agent_id)
+        if agent is None:
+            raise KeyError(agent_id)
+        if agent.status == "running":
+            raise ValueError("stop the session before deleting it")
+        self.agent_manager.delete_agent(agent_id)
+        if agent.queue_id:
+            try:
+                self.task_queue_manager.delete_queue(agent.queue_id)
+            except KeyError:
+                pass
+
+    def _read_output(self, log_path: str | None, *, max_bytes: int = 6000) -> str:
+        if not log_path:
+            return ""
+        path = Path(log_path)
+        if not path.exists():
+            return ""
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(size - max_bytes, 0))
+                data = handle.read()
+        except OSError:
+            return ""
+        text = data.decode("utf-8", errors="replace")
+        if len(text.encode("utf-8", errors="replace")) >= max_bytes and "\n" in text:
+            text = text.split("\n", 1)[1]
+        return text.strip()
+
+    def _session_payload(self, agent: Any, queue: Any | None) -> dict[str, Any]:
+        payload = agent.to_dict() if hasattr(agent, "to_dict") else dict(agent)
+        queue_payload = queue.to_dict() if queue is not None and hasattr(queue, "to_dict") else (queue or {})
+        payload["queue"] = queue_payload
+        payload["output"] = self._read_output(payload.get("log_path"))
+        return payload
+
+    def list_session_payloads(self) -> list[dict[str, Any]]:
+        agents = self.agent_manager.list_agents()
+        queues_by_id = {queue.queue_id: queue for queue in self.task_queue_manager.list_queues()}
+        sessions = [self._session_payload(agent, queues_by_id.get(agent.queue_id)) for agent in agents]
+        sessions.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+        return sessions
 
     def recent_runs(self, limit: int = 8) -> list[dict[str, Any]]:
         logs_root = self.config.project_root / "logs"
@@ -398,15 +468,14 @@ class MindexUiApp:
         )
         if completed.returncode == 0:
             branch = completed.stdout.strip() or branch
-        agents = [agent.to_dict() for agent in self.agent_manager.list_agents()]
-        queues = [queue.to_dict() for queue in self.task_queue_manager.list_queues()]
+        sessions = self.list_session_payloads()
         return {
             "project_root": str(self.config.project_root),
             "branch": branch,
             "config_path": str(self.config.config_path),
             "title": self.config.title,
-            "agent_count": len(agents),
-            "running_count": sum(1 for agent in agents if agent["status"] == "running"),
+            "session_count": len(sessions),
+            "running_count": sum(1 for session in sessions if session["status"] == "running"),
             "state_file": str(self.config.state_file),
             "queue_log_dir": str(self.config.queue_log_dir),
             "allowed_origins": list(self.config.allowed_origins),
@@ -417,9 +486,7 @@ class MindexUiApp:
                 "rate_limited_logins": True,
                 "hashed_password_store": True,
             },
-            "recent_runs": self.recent_runs(),
-            "queues": queues,
-            "agents": agents,
+            "sessions": sessions,
         }
 
 
@@ -436,7 +503,7 @@ INDEX_HTML = """<!doctype html>
     <header class=\"hero\">
       <p class=\"eyebrow\">Secure Mindex operations</p>
       <h1>{title}</h1>
-      <p class=\"lede\">A local control room for Mindex, queued coding agents, and session task queues.</p>
+      <p class=\"lede\">A minimal browser view for Mindex sessions, their queue order, and their visible output.</p>
     </header>
     <main id=\"app\" class=\"app\"></main>
   </div>
@@ -448,19 +515,19 @@ INDEX_HTML = """<!doctype html>
 
 APP_CSS = """
 :root {
-  --paper: #f4efe3;
-  --ink: #16130f;
-  --muted: #61584f;
-  --panel: rgba(250, 245, 234, 0.9);
-  --panel-strong: rgba(255, 251, 243, 0.96);
-  --line: rgba(38, 26, 12, 0.12);
-  --accent: #b3522f;
-  --accent-strong: #7e2e17;
-  --sage: #27423a;
-  --danger: #8e2430;
-  --shadow: 0 18px 60px rgba(29, 18, 10, 0.12);
-  --heading: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --paper: #f6f1e8;
+  --ink: #191611;
+  --muted: #6a6258;
+  --panel: rgba(255, 251, 245, 0.96);
+  --line: rgba(35, 28, 18, 0.12);
+  --accent: #a84d2d;
+  --accent-soft: rgba(168, 77, 45, 0.12);
+  --sage: #295244;
+  --danger: #8b2f3d;
+  --shadow: 0 18px 50px rgba(35, 24, 10, 0.08);
+  --heading: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --body: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 * { box-sizing: border-box; }
 body {
@@ -468,238 +535,263 @@ body {
   font-family: var(--body);
   color: var(--ink);
   background:
-    radial-gradient(circle at top left, rgba(203, 159, 64, 0.28), transparent 36%),
-    radial-gradient(circle at top right, rgba(179, 82, 47, 0.18), transparent 34%),
-    linear-gradient(180deg, #efe8da 0%, #f8f3eb 45%, #efe6d7 100%);
-  min-height: 100vh;
+    radial-gradient(circle at top left, rgba(168, 77, 45, 0.12), transparent 32%),
+    linear-gradient(180deg, #efe7d8 0%, #f8f4ed 46%, #f1eadf 100%);
 }
 .shell {
-  width: min(1200px, calc(100vw - 32px));
+  width: min(1120px, calc(100vw - 28px));
   margin: 0 auto;
-  padding: 32px 0 40px;
+  padding: 24px 0 36px;
 }
-.hero {
-  padding: 28px;
-  border: 1px solid var(--line);
-  background: linear-gradient(140deg, rgba(255,255,255,0.66), rgba(244, 235, 218, 0.9));
-  border-radius: 28px;
-  box-shadow: var(--shadow);
-  position: relative;
-  overflow: hidden;
-}
-.hero::after {
-  content: "";
-  position: absolute;
-  inset: auto -10% -25% 45%;
-  height: 180px;
-  background: linear-gradient(135deg, rgba(39, 66, 58, 0.15), rgba(203, 159, 64, 0));
-  transform: rotate(-4deg);
-}
-.eyebrow {
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--accent-strong);
-  font-size: 0.72rem;
-  margin: 0 0 10px;
-}
-.hero h1 {
-  font-family: var(--heading);
-  margin: 0;
-  font-size: clamp(2.4rem, 5vw, 4.5rem);
-  line-height: 0.92;
-  max-width: 8ch;
-}
-.lede {
-  max-width: 48rem;
-  color: var(--muted);
-  margin: 16px 0 0;
-  font-size: 1.03rem;
-}
-.app {
-  margin-top: 24px;
-  display: grid;
-  gap: 20px;
-}
-.panel, .queue-card, .agent-card {
+.hero,
+.panel,
+.session-card,
+.task-item,
+.output-card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 24px;
-  padding: 22px;
   box-shadow: var(--shadow);
 }
-.panel {
-  animation: rise 380ms ease both;
+.hero {
+  padding: 24px;
+  border-radius: 28px;
 }
-.panel:nth-child(2) { animation-delay: 60ms; }
-.panel:nth-child(3) { animation-delay: 120ms; }
-.panel:nth-child(4) { animation-delay: 180ms; }
-@keyframes rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+.hero h1 {
+  margin: 0;
+  font-family: var(--heading);
+  font-size: clamp(2.2rem, 5vw, 4rem);
+  line-height: 0.94;
+}
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--accent);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+.lede,
+.muted,
+label {
+  color: var(--muted);
+}
+.lede {
+  margin: 14px 0 0;
+  max-width: 44rem;
+}
+.app {
+  margin-top: 20px;
+  display: grid;
+  gap: 18px;
+}
+.panel,
+.session-card {
+  border-radius: 24px;
+  padding: 20px;
 }
 .stack {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
-.grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
 }
-.kicker {
-  margin: 0 0 6px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-.metric {
-  font-family: var(--heading);
-  font-size: 2.3rem;
-  margin: 0;
-}
-label {
-  display: grid;
-  gap: 8px;
-  font-size: 0.92rem;
-  color: var(--muted);
-}
-input, textarea, select {
-  width: 100%;
-  border-radius: 14px;
-  border: 1px solid rgba(22, 19, 15, 0.16);
-  background: var(--panel-strong);
-  color: var(--ink);
-  padding: 12px 14px;
-  font: inherit;
-}
-textarea { min-height: 110px; resize: vertical; }
-button {
-  border: 0;
-  border-radius: 999px;
-  padding: 12px 18px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 140ms ease, opacity 140ms ease;
-}
-button:hover { transform: translateY(-1px); }
-button:disabled { opacity: 0.45; cursor: wait; transform: none; }
 .button-row {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
-.primary { background: var(--accent); color: #fff7f1; }
-.secondary { background: rgba(39, 66, 58, 0.12); color: var(--sage); }
-.ghost { background: rgba(22, 19, 15, 0.06); color: var(--ink); }
-.danger { background: var(--danger); color: #fff4f5; }
-.row-between {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
+button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+.primary { background: var(--accent); color: #fff7f2; }
+.secondary { background: rgba(41, 82, 68, 0.12); color: var(--sage); }
+.ghost { background: rgba(25, 22, 17, 0.06); color: var(--ink); }
+.danger { background: var(--danger); color: #fff4f6; }
+input,
+textarea,
+select {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(35, 28, 18, 0.14);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--ink);
+  padding: 12px 14px;
+  font: inherit;
+}
+textarea { min-height: 96px; resize: vertical; }
+label {
+  display: grid;
+  gap: 7px;
+  font-size: 0.92rem;
+}
+code,
+.output-text {
+  font-family: var(--mono);
+}
+.kicker {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.metric {
+  margin: 0;
+  font-family: var(--heading);
+  font-size: 2rem;
+}
+.summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.summary-tile {
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(35, 28, 18, 0.08);
+}
+.notice {
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(168, 77, 45, 0.1);
+  border: 1px solid rgba(168, 77, 45, 0.18);
+  color: var(--accent);
+}
+.hidden { display: none !important; }
 .status-pill {
   padding: 6px 10px;
   border-radius: 999px;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background: rgba(39, 66, 58, 0.1);
-  color: var(--sage);
-}
-.status-failed { background: rgba(142, 36, 48, 0.12); color: var(--danger); }
-.status-running, .status-in-progress { background: rgba(203, 159, 64, 0.18); color: #8a5c00; }
-.status-queued, .status-pending { background: rgba(22, 19, 15, 0.08); color: var(--muted); }
-.status-disconnected, .status-blocked { background: rgba(98, 77, 44, 0.12); color: #7e5f2c; }
-.status-done, .status-completed { background: rgba(39, 66, 58, 0.12); color: var(--sage); }
-.meta, .agent-description, .muted {
+  background: rgba(25, 22, 17, 0.08);
   color: var(--muted);
 }
-code {
-  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 0.88rem;
-}
-.notice {
-  border: 1px solid rgba(179, 82, 47, 0.2);
-  background: rgba(179, 82, 47, 0.09);
-  color: var(--accent-strong);
-  border-radius: 18px;
-  padding: 14px 16px;
-}
-.hidden { display: none !important; }
-.login-shell {
+.status-running, .status-in-progress { background: rgba(206, 161, 71, 0.22); color: #875b00; }
+.status-completed, .status-done { background: rgba(41, 82, 68, 0.14); color: var(--sage); }
+.status-failed { background: rgba(139, 47, 61, 0.12); color: var(--danger); }
+.status-blocked, .status-disconnected { background: rgba(90, 70, 42, 0.14); color: #70552c; }
+.session-list {
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  gap: 20px;
+  gap: 16px;
 }
-.login-card {
-  max-width: 460px;
-}
-.login-aside {
-  background: linear-gradient(160deg, rgba(39, 66, 58, 0.14), rgba(203, 159, 64, 0.08));
-}
-.run-list, .security-list, .task-list {
+.session-card {
   display: grid;
-  gap: 10px;
+  gap: 18px;
 }
-.run-item, .security-item {
-  display: flex;
-  justify-content: space-between;
+.session-meta {
+  display: grid;
+  gap: 6px;
+}
+.session-meta p {
+  margin: 0;
+  color: var(--muted);
+}
+.queue-shell {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+}
+.queue-column,
+.output-card {
+  display: grid;
   gap: 12px;
-  padding: 10px 0;
-  border-top: 1px solid rgba(22, 19, 15, 0.08);
 }
-.run-item:first-child, .security-item:first-child { border-top: 0; padding-top: 0; }
-.banner {
-  border-left: 4px solid var(--accent);
-  padding-left: 12px;
-  color: var(--muted);
+.output-card {
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(25, 22, 17, 0.94);
+  color: #f9f4ea;
+}
+.output-card h3,
+.queue-column h3 {
+  margin: 0;
+}
+.output-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 .task-list {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-.task-item {
   display: grid;
   gap: 10px;
-  border: 1px solid rgba(22, 19, 15, 0.08);
+}
+.task-item {
   border-radius: 16px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.72);
   cursor: grab;
+  display: grid;
+  gap: 10px;
 }
 .task-item.dragging {
-  opacity: 0.55;
-  transform: scale(0.99);
+  opacity: 0.5;
 }
 .task-head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
   align-items: flex-start;
+  gap: 10px;
 }
 .task-title {
   margin: 0;
   font-weight: 700;
 }
 .task-details {
-  margin: 0;
+  margin: 4px 0 0;
   color: var(--muted);
   white-space: pre-wrap;
 }
-.queue-empty {
-  margin: 0;
+.empty-state {
+  text-align: center;
+  padding: 30px 18px;
+  border-radius: 20px;
+  border: 1px dashed rgba(35, 28, 18, 0.18);
   color: var(--muted);
+  background: rgba(255, 255, 255, 0.48);
 }
-@media (max-width: 860px) {
-  .login-shell { grid-template-columns: 1fr; }
-  .shell { width: min(100vw - 18px, 1200px); padding-top: 18px; }
-  .hero, .panel, .queue-card, .agent-card { border-radius: 22px; }
+.login-card {
+  max-width: 460px;
+  margin: 0 auto;
+}
+@media (max-width: 900px) {
+  .queue-shell {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .shell {
+    width: min(100vw - 18px, 1120px);
+    padding-top: 18px;
+  }
+  .hero,
+  .panel,
+  .session-card {
+    border-radius: 22px;
+  }
 }
 """
+
 
 
 APP_JS = """
@@ -734,27 +826,16 @@ function statusClass(status) {
 function renderLogin(message = '') {
   const app = document.getElementById('app');
   app.innerHTML = `
-    <section class="panel login-shell">
-      <div class="panel login-card">
-        <p class="kicker">Authenticate</p>
-        <h2>Open the control deck</h2>
-        <p class="muted">Use the credentials stored in <code>.mindex/ui_config.json</code>. The server stores a salted password hash instead of a plaintext secret.</p>
-        <form id="login-form" class="stack">
-          <label>Username<input name="username" autocomplete="username" required value="admin"></label>
-          <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-          <div class="button-row"><button class="primary" type="submit">Sign in</button></div>
-          <p id="login-error" class="notice ${message ? '' : 'hidden'}">${escapeHtml(message)}</p>
-        </form>
-      </div>
-      <aside class="panel login-aside">
-        <p class="kicker">Security posture</p>
-        <div class="security-list">
-          <div class="security-item"><span>Loopback by default</span><strong>Yes</strong></div>
-          <div class="security-item"><span>CSRF checks</span><strong>Enabled</strong></div>
-          <div class="security-item"><span>Rate-limited logins</span><strong>Enabled</strong></div>
-          <div class="security-item"><span>Shell injection surface</span><strong>Reduced</strong></div>
-        </div>
-      </aside>
+    <section class="panel login-card stack">
+      <p class="kicker">Authenticate</p>
+      <h2>Open the session view</h2>
+      <p class="muted">Use the credentials stored in <code>.mindex/ui_config.json</code>.</p>
+      <form id="login-form" class="stack">
+        <label>Username<input name="username" autocomplete="username" required value="admin"></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <div class="button-row"><button class="primary" type="submit">Sign in</button></div>
+        <p id="login-error" class="notice ${message ? '' : 'hidden'}">${escapeHtml(message)}</p>
+      </form>
     </section>`;
   document.getElementById('login-form').addEventListener('submit', submitLogin);
 }
@@ -777,32 +858,6 @@ async function submitLogin(event) {
   }
 }
 
-function renderQueueCard(queue) {
-  const tasks = queue.tasks || [];
-  return `
-    <article class="queue-card stack">
-      <div class="row-between">
-        <div>
-          <h2>${escapeHtml(queue.name)}</h2>
-          <p class="muted">${escapeHtml(queue.description || 'No queue description yet.')}</p>
-        </div>
-        <div class="button-row">
-          <button class="ghost" type="button" data-rename-queue="${escapeHtml(queue.queue_id)}">Edit queue</button>
-          <button class="danger" type="button" data-delete-queue="${escapeHtml(queue.queue_id)}">Delete queue</button>
-        </div>
-      </div>
-      <ul class="task-list" data-task-list="${escapeHtml(queue.queue_id)}">
-        ${tasks.length ? tasks.map(task => renderTaskCard(queue.queue_id, task)).join('') : '<li class="queue-empty">No tasks yet. Add one below.</li>'}
-      </ul>
-      <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}">
-        <label>Task title<input name="title" placeholder="Audit queue persistence" required></label>
-        <label>Task details<textarea name="details" placeholder="Notes, acceptance criteria, or reminders."></textarea></label>
-        <label>Status<select name="status"><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option></select></label>
-        <div class="button-row"><button class="primary" type="submit">Add task</button></div>
-      </form>
-    </article>`;
-}
-
 function renderTaskCard(queueId, task) {
   return `
     <li class="task-item" draggable="true" data-task-id="${escapeHtml(task.task_id)}" data-queue-id="${escapeHtml(queueId)}">
@@ -814,138 +869,133 @@ function renderTaskCard(queueId, task) {
         <div class="${statusClass(task.status)}">${escapeHtml(String(task.status || 'pending').replace('_', ' '))}</div>
       </div>
       <div class="button-row">
-        <button class="ghost" type="button" data-queue-id="${escapeHtml(queueId)}" data-edit-task="${escapeHtml(task.task_id)}">Edit</button>
+        <button class="ghost" type="button" data-queue-id="${escapeHtml(queueId)}" data-edit-task="${escapeHtml(task.task_id)}" data-task-title="${escapeHtml(task.title)}" data-task-details="${escapeHtml(task.details || '')}" data-task-status="${escapeHtml(task.status || 'pending')}">Edit task</button>
         <button class="danger" type="button" data-queue-id="${escapeHtml(queueId)}" data-delete-task="${escapeHtml(task.task_id)}">Delete</button>
       </div>
     </li>`;
 }
 
-function renderAgentCard(agent) {
-  const running = agent.status === 'running';
+function renderSessionCard(session) {
+  const queue = session.queue || {};
+  const tasks = queue.tasks || [];
+  const running = session.status === 'running';
+  const output = session.output || 'No output yet.';
   return `
-    <article class="agent-card stack">
+    <article class="session-card">
       <div class="row-between">
-        <div>
-          <h3>${escapeHtml(agent.name)}</h3>
-          <p class="agent-description">${escapeHtml(agent.description || 'No description provided.')}</p>
+        <div class="stack session-meta">
+          <div>
+            <p class="kicker">Session</p>
+            <h2>${escapeHtml(session.name)}</h2>
+          </div>
+          <p><code>${escapeHtml((session.command_args || []).join(' '))}</code></p>
+          <p>Workdir: <code>${escapeHtml(session.workdir || '')}</code></p>
         </div>
-        <div class="${statusClass(agent.status)}">${escapeHtml(agent.status)}</div>
+        <div class="stack" style="justify-items:end;">
+          <div class="${statusClass(session.status)}">${escapeHtml(session.status)}</div>
+          <div class="button-row">
+            <button class="primary" ${running ? 'disabled' : ''} data-start-session="${escapeHtml(session.agent_id)}">Start</button>
+            <button class="ghost" ${!running ? 'disabled' : ''} data-stop-session="${escapeHtml(session.agent_id)}">Stop</button>
+            <button class="danger" ${running ? 'disabled' : ''} data-delete-session="${escapeHtml(session.agent_id)}">Delete</button>
+          </div>
+        </div>
       </div>
-      <p class="meta"><strong>Args:</strong> <code>${escapeHtml((agent.command_args || []).join(' '))}</code></p>
-      <p class="meta"><strong>Workdir:</strong> <code>${escapeHtml(agent.workdir)}</code></p>
-      ${agent.log_path ? `<p class="meta"><strong>Log:</strong> <code>${escapeHtml(agent.log_path)}</code></p>` : ''}
-      ${agent.last_error ? `<p class="notice">${escapeHtml(agent.last_error)}</p>` : ''}
-      <div class="button-row">
-        <button class="primary" ${running ? 'disabled' : ''} data-start-agent="${escapeHtml(agent.agent_id)}">Start</button>
-        <button class="ghost" ${!running ? 'disabled' : ''} data-stop-agent="${escapeHtml(agent.agent_id)}">Stop</button>
-        <button class="danger" ${running ? 'disabled' : ''} data-delete-agent="${escapeHtml(agent.agent_id)}">Delete</button>
+      <div class="queue-shell">
+        <section class="queue-column">
+          <div class="row-between">
+            <div>
+              <p class="kicker">Queue</p>
+              <h3>${escapeHtml(queue.name || 'Session queue')}</h3>
+              <p class="muted">${escapeHtml(queue.description || 'Edit this queue and drag tasks into the right order.')}</p>
+            </div>
+            ${queue.queue_id ? `<button class="ghost" type="button" data-edit-queue="${escapeHtml(queue.queue_id)}" data-queue-name="${escapeHtml(queue.name || '')}" data-queue-description="${escapeHtml(queue.description || '')}">Edit queue</button>` : ''}
+          </div>
+          ${queue.queue_id ? `
+            <ul class="task-list" data-task-list="${escapeHtml(queue.queue_id)}">
+              ${tasks.length ? tasks.map(task => renderTaskCard(queue.queue_id, task)).join('') : '<li class="empty-state">No queue items yet.</li>'}
+            </ul>
+            <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}">
+              <label>Task title<input name="title" placeholder="Review failing output" required></label>
+              <label>Task details<textarea name="details" placeholder="Acceptance notes or extra context."></textarea></label>
+              <label>Status<select name="status"><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option></select></label>
+              <div class="button-row"><button class="secondary" type="submit">Add queue item</button></div>
+            </form>
+          ` : '<div class="empty-state">This legacy session does not have a queue attached.</div>'}
+        </section>
+        <section class="output-card">
+          <div>
+            <p class="kicker">Output</p>
+            <h3>Visible session output</h3>
+          </div>
+          <pre class="output-text">${escapeHtml(output)}</pre>
+        </section>
       </div>
     </article>`;
 }
 
 function renderDashboard(payload) {
   const app = document.getElementById('app');
-  const agents = payload.agents || [];
-  const queues = payload.queues || [];
-  const recentRuns = payload.recent_runs || [];
+  const sessions = payload.sessions || [];
   app.innerHTML = `
-    <section class="grid">
-      <article class="panel">
-        <p class="kicker">Workspace</p>
-        <p class="metric">${payload.agent_count}</p>
-        <p class="muted">Registered agents in <code>${escapeHtml(payload.project_root)}</code></p>
-      </article>
-      <article class="panel">
-        <p class="kicker">Task queues</p>
-        <p class="metric">${queues.length}</p>
-        <p class="muted">Drag tasks within a queue to reprioritize upcoming work.</p>
-      </article>
-      <article class="panel">
-        <p class="kicker">Live sessions</p>
-        <p class="metric">${payload.running_count}</p>
-        <p class="muted">Running on branch <code>${escapeHtml(payload.branch)}</code></p>
-      </article>
-      <article class="panel">
-        <p class="kicker">Exposure</p>
-        <p class="metric">${payload.allow_remote ? 'Remote' : 'Local'}</p>
-        <p class="muted">Allowed origins: <code>${escapeHtml((payload.allowed_origins || []).join(', '))}</code></p>
-      </article>
-    </section>
-    <section class="grid">
-      <article class="panel stack">
-        <div class="row-between"><div><p class="kicker">Queue design</p><h2>Upcoming session work</h2></div><button id="refresh-button" class="ghost">Refresh</button></div>
-        <p class="banner">Queues persist under <code>.mindex/task_queues.json</code>. Add, edit, delete, and reorder tasks from the browser.</p>
-        <form id="queue-form" class="stack">
-          <label>Queue name<input name="name" placeholder="Release hardening" required></label>
-          <label>Queue description<textarea name="description" placeholder="What this queue is coordinating."></textarea></label>
-          <div class="button-row"><button class="primary" type="submit">Create queue</button></div>
-          <p id="queue-form-error" class="notice hidden"></p>
-        </form>
-      </article>
-      <article class="panel stack">
-        <p class="kicker">Recent Mindex runs</p>
-        <h2>Observed activity</h2>
-        <div class="run-list">${recentRuns.length ? recentRuns.map(run => `
-          <div class="run-item">
-            <div><strong>${escapeHtml(run.prompt)}</strong><div class="muted"><code>${escapeHtml(run.run_dir)}</code></div></div>
-            <div class="${statusClass(run.status)}">${escapeHtml(run.status)}</div>
-          </div>`).join('') : '<p class="muted">No recorded runs yet.</p>'}
-        </div>
-      </article>
-    </section>
     <section class="panel stack">
-      <div class="row-between"><div><p class="kicker">Task queues</p><h2>Session backlog</h2></div><button id="logout-button" class="secondary">Logout</button></div>
-      <div class="grid">${queues.map(renderQueueCard).join('')}</div>
+      <div class="row-between">
+        <div>
+          <p class="kicker">Sessions</p>
+          <h2>Simple session manager</h2>
+          <p class="muted">Each session owns a queue and shows its output in place.</p>
+        </div>
+        <div class="button-row">
+          <button id="refresh-button" class="ghost">Refresh</button>
+          <button id="logout-button" class="secondary">Logout</button>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <article class="summary-tile"><p class="kicker">Workspace</p><p class="metric">${sessions.length}</p><p class="muted">Sessions in <code>${escapeHtml(payload.project_root)}</code></p></article>
+        <article class="summary-tile"><p class="kicker">Running</p><p class="metric">${payload.running_count}</p><p class="muted">Branch <code>${escapeHtml(payload.branch)}</code></p></article>
+      </div>
+      <form id="session-form" class="stack">
+        <label>Session name<input name="name" placeholder="Triage flaky tests" required></label>
+        <label>Mindex arguments<input name="command_args" placeholder='exec "triage the repo"' required></label>
+        <label>Working directory<input name="workdir" value="${escapeHtml(payload.project_root)}" required></label>
+        <label>Queue description<textarea name="queue_description" placeholder="What this session should work through."></textarea></label>
+        <div class="button-row"><button class="primary" type="submit">Create session</button></div>
+        <p id="session-form-error" class="notice hidden"></p>
+      </form>
     </section>
-    <section class="grid">
-      <article class="panel stack">
-        <p class="kicker">Launch agent</p>
-        <h2>Queue a new Mindex job</h2>
-        <p class="banner">Agents run as <code>python -m mindex ...</code> without a shell. Keep workdirs inside the configured project root.</p>
-        <form id="agent-form" class="stack">
-          <label>Agent name<input name="name" placeholder="Docs hardening pass" required></label>
-          <label>Description<textarea name="description" placeholder="What this coding agent is responsible for."></textarea></label>
-          <label>Mindex arguments<input name="command_args" placeholder="--version or exec --json \"triage repo\"" required></label>
-          <label>Working directory<input name="workdir" value="${escapeHtml(payload.project_root)}" required></label>
-          <label>Feature branch<input name="feature_branch" placeholder="mindex/secure-ui-agent"></label>
-          <label><input type="checkbox" name="auto_publish" checked> Auto-publish with Mindex defaults</label>
-          <div class="button-row"><button class="primary" type="submit">Create agent</button></div>
-          <p id="agent-form-error" class="notice hidden"></p>
-        </form>
-      </article>
-      <article class="panel stack">
-        <p class="kicker">Agent roster</p>
-        <h2>Managed coding agents</h2>
-        <div class="grid">${agents.length ? agents.map(renderAgentCard).join('') : '<p class="muted">No agents yet. Create one to start directing Mindex jobs from the browser.</p>'}</div>
-      </article>
+    <section class="session-list">
+      ${sessions.length ? sessions.map(renderSessionCard).join('') : '<div class="empty-state">No sessions yet. Create one to start tracking queue order and output.</div>'}
     </section>`;
 
-  document.getElementById('queue-form').addEventListener('submit', submitQueue);
-  document.getElementById('agent-form').addEventListener('submit', submitAgent);
+  document.getElementById('session-form').addEventListener('submit', submitSession);
   document.getElementById('refresh-button').addEventListener('click', loadDashboard);
   document.getElementById('logout-button').addEventListener('click', logout);
-  document.querySelectorAll('[data-rename-queue]').forEach(node => node.addEventListener('click', () => renameQueue(node.dataset.renameQueue)));
-  document.querySelectorAll('[data-delete-queue]').forEach(node => node.addEventListener('click', () => removeQueue(node.dataset.deleteQueue)));
+  document.querySelectorAll('[data-edit-queue]').forEach(node => node.addEventListener('click', () => renameQueue(node.dataset.editQueue, node.dataset.queueName || '', node.dataset.queueDescription || '')));
   document.querySelectorAll('[data-task-form]').forEach(node => node.addEventListener('submit', submitTask));
-  document.querySelectorAll('[data-edit-task]').forEach(node => node.addEventListener('click', () => editTask(node.dataset.queueId, node.dataset.editTask)));
+  document.querySelectorAll('[data-edit-task]').forEach(node => node.addEventListener('click', () => editTask(node.dataset.queueId, node.dataset.editTask, node.dataset.taskTitle || '', node.dataset.taskDetails || '', node.dataset.taskStatus || 'pending')));
   document.querySelectorAll('[data-delete-task]').forEach(node => node.addEventListener('click', () => removeTask(node.dataset.queueId, node.dataset.deleteTask)));
-  document.querySelectorAll('[data-start-agent]').forEach(node => node.addEventListener('click', () => changeAgent(node.dataset.startAgent, 'start')));
-  document.querySelectorAll('[data-stop-agent]').forEach(node => node.addEventListener('click', () => changeAgent(node.dataset.stopAgent, 'stop')));
-  document.querySelectorAll('[data-delete-agent]').forEach(node => node.addEventListener('click', () => changeAgent(node.dataset.deleteAgent, 'delete')));
+  document.querySelectorAll('[data-start-session]').forEach(node => node.addEventListener('click', () => changeSession(node.dataset.startSession, 'start')));
+  document.querySelectorAll('[data-stop-session]').forEach(node => node.addEventListener('click', () => changeSession(node.dataset.stopSession, 'stop')));
+  document.querySelectorAll('[data-delete-session]').forEach(node => node.addEventListener('click', () => changeSession(node.dataset.deleteSession, 'delete')));
   bindTaskDragAndDrop();
 }
 
-async function submitQueue(event) {
+async function submitSession(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const errorNode = document.getElementById('queue-form-error');
+  const errorNode = document.getElementById('session-form-error');
   errorNode.classList.add('hidden');
   try {
-    await api('/api/queues', {
+    await api('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ name: form.get('name'), description: form.get('description') }),
+      body: JSON.stringify({
+        name: form.get('name'),
+        command_args: form.get('command_args'),
+        workdir: form.get('workdir'),
+        queue_description: form.get('queue_description'),
+      }),
     });
     event.currentTarget.reset();
+    event.currentTarget.elements.workdir.value = form.get('workdir');
     await loadDashboard();
   } catch (error) {
     errorNode.textContent = error.message;
@@ -953,29 +1003,20 @@ async function submitQueue(event) {
   }
 }
 
-async function renameQueue(queueId) {
-  const name = window.prompt('Queue name');
+async function renameQueue(queueId, currentName, currentDescription) {
+  const name = window.prompt('Queue name', currentName);
   if (name === null) {
     return;
   }
-  const description = window.prompt('Queue description (optional)', '');
+  const description = window.prompt('Queue description', currentDescription);
+  if (description === null) {
+    return;
+  }
   try {
     await api(`/api/queues/${queueId}`, {
       method: 'PATCH',
       body: JSON.stringify({ name, description }),
     });
-    await loadDashboard();
-  } catch (error) {
-    alert(error.message);
-  }
-}
-
-async function removeQueue(queueId) {
-  if (!window.confirm('Delete this queue and its tasks?')) {
-    return;
-  }
-  try {
-    await api(`/api/queues/${queueId}`, { method: 'DELETE' });
     await loadDashboard();
   } catch (error) {
     alert(error.message);
@@ -1002,13 +1043,19 @@ async function submitTask(event) {
   }
 }
 
-async function editTask(queueId, taskId) {
-  const title = window.prompt('Task title');
+async function editTask(queueId, taskId, currentTitle, currentDetails, currentStatus) {
+  const title = window.prompt('Task title', currentTitle);
   if (title === null) {
     return;
   }
-  const details = window.prompt('Task details (optional)', '');
-  const status = window.prompt('Status: pending, in_progress, blocked, done', 'pending');
+  const details = window.prompt('Task details', currentDetails);
+  if (details === null) {
+    return;
+  }
+  const status = window.prompt('Status: pending, in_progress, blocked, done', currentStatus);
+  if (status === null) {
+    return;
+  }
   try {
     await api(`/api/queues/${queueId}/tasks/${taskId}`, {
       method: 'PATCH',
@@ -1021,7 +1068,7 @@ async function editTask(queueId, taskId) {
 }
 
 async function removeTask(queueId, taskId) {
-  if (!window.confirm('Delete this task?')) {
+  if (!window.confirm('Delete this queue item?')) {
     return;
   }
   try {
@@ -1084,37 +1131,12 @@ function getDragAfterElement(container, y) {
   }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
 }
 
-async function submitAgent(event) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const errorNode = document.getElementById('agent-form-error');
-  errorNode.classList.add('hidden');
-  try {
-    await api('/api/agents', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: form.get('name'),
-        description: form.get('description'),
-        command_args: form.get('command_args'),
-        workdir: form.get('workdir'),
-        feature_branch: form.get('feature_branch'),
-        auto_publish: form.get('auto_publish') === 'on',
-      }),
-    });
-    event.currentTarget.reset();
-    await loadDashboard();
-  } catch (error) {
-    errorNode.textContent = error.message;
-    errorNode.classList.remove('hidden');
-  }
-}
-
-async function changeAgent(agentId, action) {
+async function changeSession(sessionId, action) {
   try {
     if (action === 'delete') {
-      await api(`/api/agents/${agentId}`, { method: 'DELETE' });
+      await api(`/api/sessions/${sessionId}`, { method: 'DELETE' });
     } else {
-      await api(`/api/agents/${agentId}/${action}`, { method: 'POST', body: '{}' });
+      await api(`/api/sessions/${sessionId}/${action}`, { method: 'POST', body: '{}' });
     }
     await loadDashboard();
   } catch (error) {
@@ -1142,6 +1164,7 @@ async function loadDashboard() {
 
 loadDashboard();
 """
+
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -1209,6 +1232,10 @@ class UiRequestHandler(BaseHTTPRequestHandler):
             return self._handle_logout()
         if path == "/api/status" and self.command == "GET":
             return self._handle_status()
+        if path == "/api/sessions" and self.command == "POST":
+            return self._handle_create_managed_session()
+        if path.startswith("/api/sessions/"):
+            return self._handle_session_route(path)
         if path == "/api/agents" and self.command == "GET":
             return self._handle_list_agents()
         if path == "/api/agents" and self.command == "POST":
@@ -1277,6 +1304,54 @@ class UiRequestHandler(BaseHTTPRequestHandler):
         if self._require_session(require_csrf=False) is None:
             return
         _json_response(self, HTTPStatus.OK, {"agents": [agent.to_dict() for agent in self.app.agent_manager.list_agents()]})
+
+    def _handle_create_managed_session(self) -> None:
+        if self._require_session(require_csrf=True) is None:
+            return
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        try:
+            command_args = shlex.split(str(payload.get("command_args", "")))
+            session_payload = self.app.create_managed_session(
+                name=str(payload.get("name", "")),
+                command_args=command_args,
+                workdir=str(payload.get("workdir", self.app.config.project_root)),
+                queue_description=str(payload.get("queue_description", "")),
+            )
+        except ValueError as exc:
+            return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        _json_response(self, HTTPStatus.CREATED, {"session": session_payload})
+
+    def _handle_session_route(self, path: str) -> None:
+        if self._require_session(require_csrf=self.command != "GET") is None:
+            return
+        segments = [segment for segment in path.split("/") if segment]
+        if len(segments) < 3:
+            return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
+        agent_id = segments[2]
+        if len(segments) == 3 and self.command == "DELETE":
+            try:
+                self.app.delete_managed_session(agent_id)
+            except KeyError:
+                return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
+            except ValueError as exc:
+                return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return _json_response(self, HTTPStatus.OK, {"ok": True})
+        if len(segments) != 4 or self.command != "POST":
+            return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
+        action = segments[3]
+        try:
+            if action == "start":
+                agent = self.app.agent_manager.start_agent(agent_id)
+            elif action == "stop":
+                agent = self.app.agent_manager.stop_agent(agent_id)
+            else:
+                return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except KeyError:
+            return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
+        queues_by_id = {queue.queue_id: queue for queue in self.app.task_queue_manager.list_queues()}
+        _json_response(self, HTTPStatus.OK, {"session": self.app._session_payload(agent, queues_by_id.get(agent.queue_id))})
 
     def _handle_create_agent(self) -> None:
         if self._require_session(require_csrf=True) is None:

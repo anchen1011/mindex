@@ -117,22 +117,30 @@ class UiTests(unittest.TestCase):
             self.assertIsNotNone(app.sessions.get(session.token))
             self.assertTrue(session.csrf_token)
 
-            agent = app.agent_manager.create_agent(
+            managed = app.create_managed_session(
                 name="API agent",
-                description="Created from the in-process UI app",
                 command_args=["--version"],
                 workdir=root,
-                auto_publish=False,
+                queue_description="Handle the in-process UI session queue.",
             )
-            app.agent_manager.start_agent(agent.agent_id)
-            completed = app.agent_manager.wait_for_agent(agent.agent_id, timeout=10)
+            agent_id = managed["agent_id"]
+            queue_id = managed["queue"]["queue_id"]
+
+            task = app.task_queue_manager.add_task(queue_id, title="Confirm output visibility", details="Ensure the session shows log text.")
+            app.agent_manager.start_agent(agent_id)
+            completed = app.agent_manager.wait_for_agent(agent_id, timeout=10)
             self.assertEqual(completed.status, "completed")
 
             payload = app.system_status()
-            self.assertEqual(payload["agent_count"], 1)
+            self.assertEqual(payload["session_count"], 1)
             self.assertEqual(payload["running_count"], 0)
             self.assertTrue(payload["security"]["csrf_protected"])
-            self.assertGreaterEqual(len(payload["queues"]), 1)
+            self.assertEqual(len(payload["sessions"]), 1)
+            session_payload = payload["sessions"][0]
+            self.assertEqual(session_payload["agent_id"], agent_id)
+            self.assertEqual(session_payload["queue"]["queue_id"], queue_id)
+            self.assertEqual(session_payload["queue"]["tasks"][0]["task_id"], task.task_id)
+            self.assertIn("starting --version", session_payload["output"])
 
     def test_cli_routes_ui_init_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

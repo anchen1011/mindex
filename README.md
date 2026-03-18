@@ -217,14 +217,16 @@ Implemented behavior:
   hash instead of storing a plaintext password
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
-- serves a responsive control deck for authentication, recent Mindex activity,
-  agent creation, agent lifecycle controls, and session task queues
+- serves a simpler session-first browser view where each session owns one
+  editable queue, supports drag-to-reorder queue items, and shows its visible
+  output inline
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
   requests, and rate-limits repeated login failures
-- persists queue state under `.mindex/task_queues.json`, including queue names,
-  queue descriptions, and ordered task lists for the current session backlog
-- lets users add, edit, delete, and drag-to-reorder tasks inside each queue so
-  upcoming work can be reprioritized directly in the browser
+- persists session queue state under `.mindex/task_queues.json`, including
+  queue names, queue descriptions, and ordered task lists per managed session
+- lets users add, edit, delete, and drag-to-reorder tasks inside each
+  session-owned queue so upcoming work can be reprioritized directly in the
+  browser
 - keeps agent workdirs constrained to the configured project root and launches
   agents as `python -m mindex ...` without going through a shell
 - persists agent state under `.mindex/task_queues.json` and writes per-agent

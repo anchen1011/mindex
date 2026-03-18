@@ -79,6 +79,7 @@ class AgentRecord:
     description: str
     command_args: list[str]
     workdir: str
+    queue_id: str
     feature_branch: str
     auto_publish: bool
     status: str
@@ -101,6 +102,7 @@ class AgentRecord:
             description=str(payload.get("description", "")),
             command_args=[str(value) for value in payload.get("command_args", [])],
             workdir=str(payload.get("workdir", "")),
+            queue_id=str(payload.get("queue_id", "")),
             feature_branch=str(payload.get("feature_branch", "")),
             auto_publish=bool(payload.get("auto_publish", True)),
             status=str(payload.get("status", "queued")),
@@ -368,6 +370,7 @@ class AgentManager:
         description: str,
         command_args: list[str],
         workdir: Path | str,
+        queue_id: str = "",
         feature_branch: str = "",
         auto_publish: bool = True,
     ) -> AgentRecord:
@@ -381,6 +384,7 @@ class AgentManager:
             description=description.strip(),
             command_args=command_args,
             workdir=str(resolved_workdir),
+            queue_id=queue_id.strip(),
             feature_branch=feature_branch.strip(),
             auto_publish=auto_publish,
             status="queued",
