@@ -34,6 +34,7 @@ This skill is for development work inside this repository only.
 - keep `codex` unchanged; project-specific behavior belongs in `mindex`
 - treat branch-per-feature and PR-first development as the default workflow
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
+- use `mindex publish-pr` or an equivalent verified workflow before considering meaningful repository work complete
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
 - require Mindex-managed PR titles and bodies to describe the complete branch scope, not just the newest commit
 - treat automatic GitHub publication as the default completion path for each meaningful interaction, using a new branch/PR for new feature work and the existing PR only for true follow-up work on that branch
@@ -57,3 +58,4 @@ relevant validation and record the result in `logs/`.
 2. The repo-local skill and packaged skills still agree on the important rules.
 3. Tests or validation commands were run and recorded.
 4. `README.md` reflects the current feature set and workflow.
+5. Meaningful repository work was published with `mindex publish-pr` or an equivalent verified branch-and-PR workflow, and the PR URL was confirmed.
