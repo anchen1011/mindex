@@ -649,6 +649,46 @@ def default_auto_publish_notes(argv: Iterable[str], *, returncode: int | None = 
     return "\n".join(details)
 
 
+def resolve_post_action_hook(env: dict[str, str] | None = None) -> str | None:
+    merged_env = env or {}
+    explicit = merged_env.get("MINDEX_POST_ACTION_HOOK", "").strip().lower()
+    if explicit:
+        if explicit in {"0", "off", "none", "disabled"}:
+            return None
+        return explicit
+    if merged_env.get("MINDEX_AUTO_PUBLISH", "1") == "0":
+        return None
+    return "publish-pr"
+
+
+def run_post_action_hook(
+    *,
+    project_root: Path | str,
+    argv: Iterable[str],
+    branch_name: str | None = None,
+    returncode: int | None = None,
+    env: dict[str, str] | None = None,
+    log_run=None,
+) -> PublishResult | None:
+    hook_name = resolve_post_action_hook(env)
+    if hook_name is None:
+        if log_run is not None:
+            append_action(log_run, "Post-action hook skipped.")
+        return None
+    if hook_name != "publish-pr":
+        raise WorkflowError(f"Unknown post-action hook {hook_name!r}.")
+    if log_run is not None:
+        append_action(log_run, f"Running post-action hook: {hook_name}")
+    return maybe_publish_session(
+        project_root=project_root,
+        argv=argv,
+        branch_name=branch_name,
+        returncode=returncode,
+        env=env,
+        log_run=log_run,
+    )
+
+
 def _has_publishable_work(project_root: Path, *, branch_name: str, env: dict[str, str] | None = None) -> bool:
     if _working_tree_has_changes(project_root, env=env):
         return True

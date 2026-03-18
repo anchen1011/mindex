@@ -1,5 +1,28 @@
 # Mindex
 
+## One-Click Configuration
+
+There are two simple setup paths:
+
+1. **Local install:** Clone the repository, then run `pip install -e .`
+2. **Codex install:** Open Codex in the repository and send:
+   `Use the configure skill to install and configure Mindex for this project.`
+
+## Project Highlights
+
+1. **Skill-first configuration:** Mindex ships with a configure workflow that
+   can be triggered from a direct install command or from a single Codex
+   instruction.
+2. **Systematic logging:** Mindex records prompts, actions, outputs, and
+   validation results under `logs/` for better observability.
+3. **Automatic commits and PRs:** Mindex defaults to feature-branch
+   publication so changes are easier to trace, review, and control.
+4. **Queue management UI:** Mindex includes a local UI for managing task
+   queues and coding agents with better visibility across workflows.
+
+Next, we will keep improving the Harness with a strong focus on **security**,
+**testing**, and **memory**.
+
 Mindex is a Codex wrapper and configuration layer that installs a managed Codex
 environment with repeatable setup, proactive logging, and a GitHub PR-first
 workflow across the tasks and repositories you run through `mindex`.

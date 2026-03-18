@@ -303,6 +303,73 @@ class LauncherTests(unittest.TestCase):
             self.assertIn("Automatic Session Publication", gh_state["pr"]["payload"]["body"])
             self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
 
+    def test_launch_codex_runs_explicit_publish_hook_even_when_auto_publish_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            remote_root = Path(tmpdir) / "remote.git"
+            bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            state_path = Path(tmpdir) / "fake-gh-state.json"
+            root.mkdir()
+            bin_dir.mkdir()
+            (root / "README.md").write_text("# repo\n", encoding="utf-8")
+            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+            self._init_git_repo(root)
+            subprocess.run(["git", "init", "--bare", str(remote_root)], cwd=str(root.parent), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote_root)], cwd=str(root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "push", "-u", "origin", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            fake_codex = bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
+                "Path('session-note.txt').write_text('post action hook\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            fake_gh = bin_dir / "gh"
+            self._write_fake_gh(fake_gh)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "viewer_login": "anchen1011",
+                        "repo_name_with_owner": "anchen1011/mindex",
+                        "repo_owner": "anchen1011",
+                        "repo_url": "https://github.com/anchen1011/mindex",
+                        "default_branch": "main",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            returncode = launch_codex(
+                [],
+                project_root=root,
+                logs_root=logs_root,
+                env={
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "FAKE_GH_STATE": str(state_path),
+                    "MINDEX_CODEX_BIN": str(fake_codex),
+                    "MINDEX_DISABLE_SCRIPT": "1",
+                    "MINDEX_AUTO_PUBLISH": "0",
+                    "MINDEX_POST_ACTION_HOOK": "publish-pr",
+                },
+            )
+
+            self.assertEqual(returncode, 0)
+            launcher_status_files = list(logs_root.glob("**/*-launcher/status.json"))
+            self.assertTrue(launcher_status_files)
+            latest_status = json.loads(sorted(launcher_status_files)[-1].read_text(encoding="utf-8"))
+            self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/mindex/pull/1")
+            self.assertEqual(latest_status["published_branch"], "mindex/codex-session")
+
+            gh_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(gh_state["pr"]["payload"]["headRefName"], "mindex/codex-session")
+            self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
+
     def test_launch_codex_in_multi_agent_mode_avoids_reusing_another_feature_branch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
