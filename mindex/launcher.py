@@ -8,7 +8,7 @@ import subprocess
 from typing import Iterable
 
 from mindex.codex_home import default_managed_codex_home
-from mindex.github_workflow import WorkflowError, ensure_feature_branch, maybe_publish_session
+from mindex.github_workflow import WorkflowError, ensure_feature_branch, run_post_action_hook
 from mindex.logging_utils import append_action, create_log_run, write_status
 
 
@@ -113,20 +113,19 @@ def launch_codex(
         capture_path = None
 
     publish_result = None
-    if run_env.get("MINDEX_AUTO_PUBLISH", "1") != "0":
-        try:
-            publish_result = maybe_publish_session(
-                project_root=launch_root,
-                argv=args,
-                branch_name=active_branch if "active_branch" in locals() else None,
-                returncode=completed.returncode,
-                env=run_env,
-                log_run=log_run,
-            )
-            if publish_result is not None:
-                append_action(log_run, f"Automatic publication verified: {publish_result.pr_url}")
-        except WorkflowError as exc:
-            append_action(log_run, f"Automatic publication skipped: {exc}")
+    try:
+        publish_result = run_post_action_hook(
+            project_root=launch_root,
+            argv=args,
+            branch_name=active_branch if "active_branch" in locals() else None,
+            returncode=completed.returncode,
+            env=run_env,
+            log_run=log_run,
+        )
+        if publish_result is not None:
+            append_action(log_run, f"Automatic publication verified: {publish_result.pr_url}")
+    except WorkflowError as exc:
+        append_action(log_run, f"Automatic publication skipped: {exc}")
 
     write_status(
         log_run,
