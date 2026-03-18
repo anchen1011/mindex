@@ -7,28 +7,58 @@ import shutil
 import subprocess
 from typing import Iterable
 
-from mindex.codex_home import default_managed_codex_home
+from mindex.codex_home import default_managed_codex_home, default_managed_logs_root
 from mindex.github_workflow import WorkflowError, ensure_feature_branch, run_post_action_hook
 from mindex.logging_utils import append_action, create_log_run, write_status
 
 
-def find_project_root(start: Path | str | None = None) -> Path:
-    current = Path(start or Path.cwd()).resolve()
+def _git_toplevel(start: Path, *, env: dict[str, str] | None = None) -> Path | None:
+    git_env = os.environ.copy()
+    if env:
+        git_env.update(env)
     git_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        cwd=str(current),
+        cwd=str(start),
         text=True,
         capture_output=True,
         check=False,
+        env=git_env,
     )
-    if git_root.returncode == 0:
-        resolved = git_root.stdout.strip()
-        if resolved:
-            return Path(resolved).resolve()
+    if git_root.returncode != 0:
+        return None
+    resolved = git_root.stdout.strip()
+    if not resolved:
+        return None
+    return Path(resolved).resolve()
+
+
+def _looks_like_workspace_root(path: Path) -> bool:
+    return (path / "README.md").exists() and (path / "HISTORY.md").exists()
+
+
+def find_project_root(start: Path | str | None = None) -> Path:
+    current = Path(start or Path.cwd()).resolve()
+    git_root = _git_toplevel(current)
+    if git_root is not None:
+        return git_root
     for candidate in (current, *current.parents):
-        if (candidate / "README.md").exists() and (candidate / "HISTORY.md").exists():
+        if _looks_like_workspace_root(candidate):
             return candidate
     return current
+
+
+def resolve_logs_root(
+    launch_root: Path | str,
+    *,
+    env: dict[str, str] | None = None,
+) -> Path:
+    resolved_root = Path(launch_root).resolve()
+    configured_logs_root = default_managed_logs_root(env=env)
+    if (env or os.environ).get("MINDEX_LOGS_ROOT"):
+        return configured_logs_root
+    if _git_toplevel(resolved_root, env=env) == resolved_root or _looks_like_workspace_root(resolved_root):
+        return (resolved_root / "logs").resolve()
+    return configured_logs_root
 
 
 def resolve_codex_command(env: dict[str, str] | None = None) -> str:
@@ -46,10 +76,10 @@ def launch_codex(
 ) -> int:
     args = list(argv)
     launch_root = find_project_root(project_root)
-    resolved_logs_root = Path(logs_root).resolve() if logs_root else (launch_root / "logs")
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
+    resolved_logs_root = Path(logs_root).resolve() if logs_root else resolve_logs_root(launch_root, env=run_env)
     managed_codex_home = default_managed_codex_home(env=run_env)
     run_env["MINDEX_CODEX_HOME"] = str(managed_codex_home)
     run_env["CODEX_HOME"] = str(managed_codex_home)
