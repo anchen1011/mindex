@@ -385,19 +385,21 @@ class MindexUiApp:
         self,
         *,
         name: str,
-        command_args: list[str],
+        command_args: list[str] | None = None,
         workdir: Path | str,
         queue_description: str = "",
     ) -> dict[str, Any]:
+        session_name = name.strip() or "Untitled session"
+        resolved_command_args = command_args or ["exec", session_name]
         queue = self.task_queue_manager.create_queue(
-            name=name,
-            description=queue_description or f"Queue for {name.strip() or 'this session'}.",
+            name=session_name,
+            description=queue_description or f"Queue for {session_name}.",
         )
         try:
             agent = self.agent_manager.create_agent(
-                name=name,
+                name=session_name,
                 description=queue_description,
-                command_args=command_args,
+                command_args=resolved_command_args,
                 workdir=workdir,
                 queue_id=queue.queue_id,
             )
@@ -911,7 +913,6 @@ function renderSessionCard(session) {
             <p class="kicker">Session</p>
             <h2>${escapeHtml(session.name)}</h2>
           </div>
-          <p><code>${escapeHtml((session.command_args || []).join(' '))}</code></p>
           <p>Workdir: <code>${escapeHtml(session.workdir || '')}</code></p>
         </div>
         <div class="stack" style="justify-items:end;">
@@ -978,9 +979,7 @@ function renderDashboard(payload) {
       </div>
       <form id="session-form" class="stack">
         <label>Session name<input name="name" placeholder="Triage flaky tests" required></label>
-        <label>Mindex arguments<input name="command_args" placeholder='exec "triage the repo"' required></label>
         <label>Working directory<input name="workdir" value="${escapeHtml(payload.project_root)}" required></label>
-        <label>Queue description<textarea name="queue_description" placeholder="What this session should work through."></textarea></label>
         <div class="button-row"><button class="primary" type="submit">Create session</button></div>
         <p id="session-form-error" class="notice hidden"></p>
       </form>
@@ -1012,9 +1011,7 @@ async function submitSession(event) {
       method: 'POST',
       body: JSON.stringify({
         name: form.get('name'),
-        command_args: form.get('command_args'),
         workdir: form.get('workdir'),
-        queue_description: form.get('queue_description'),
       }),
     });
     event.currentTarget.reset();
@@ -1335,7 +1332,7 @@ class UiRequestHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
         try:
-            command_args = shlex.split(str(payload.get("command_args", "")))
+            command_args = shlex.split(str(payload.get("command_args", ""))) if "command_args" in payload else []
             session_payload = self.app.create_managed_session(
                 name=str(payload.get("name", "")),
                 command_args=command_args,

@@ -220,6 +220,8 @@ Implemented behavior:
 - serves a simpler session-first browser view where each session owns one
   editable queue, supports drag-to-reorder queue items, and shows its visible
   output inline
+- lets a new session be created from just its name and workdir, defaulting the
+  underlying Mindex prompt and queue description automatically
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
   requests, and rate-limits repeated login failures
 - supports explicit `--disable-origin-checks` and `--disable-csrf-checks`

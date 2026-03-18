@@ -137,6 +137,20 @@ class UiTests(unittest.TestCase):
 
         self.assertIs(handler._require_session(require_csrf=True), session)
 
+    def test_create_managed_session_defaults_command_args_from_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret")
+            app = MindexUiApp(bootstrap.config)
+
+            managed = app.create_managed_session(name="Triage flaky tests", workdir=root)
+
+            self.assertEqual(managed["name"], "Triage flaky tests")
+            self.assertEqual(managed["command_args"], ["exec", "Triage flaky tests"])
+            self.assertEqual(managed["queue"]["name"], "Triage flaky tests")
+            self.assertEqual(managed["queue"]["description"], "Queue for Triage flaky tests.")
+
     def test_ui_app_creates_sessions_and_reports_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
