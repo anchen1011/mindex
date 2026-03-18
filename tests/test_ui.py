@@ -4,6 +4,8 @@ from contextlib import redirect_stdout
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -11,7 +13,7 @@ import unittest
 from mindex.cli import main as cli_main
 from mindex.task_queue import AgentManager, TaskQueueManager
 import mindex.ui as ui_module
-from mindex.ui import MindexUiApp, load_or_create_ui_config
+from mindex.ui import APP_JS, MindexUiApp, load_or_create_ui_config
 
 
 class UiTests(unittest.TestCase):
@@ -244,6 +246,139 @@ class UiTests(unittest.TestCase):
             self.assertTrue(payload["allow_remote"])
             self.assertTrue(payload["disable_origin_checks"])
             self.assertTrue(payload["disable_csrf_checks"])
+
+    def test_submit_handlers_survive_current_target_clearing(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+
+        script = f"""
+const vm = require('vm');
+
+let source = {APP_JS!r};
+source = source.replace(/\\nloadDashboard\\(\\);\\s*$/, '\\n');
+
+const errorNode = {{
+  textContent: '',
+  classList: {{
+    add() {{}},
+    remove() {{}},
+  }},
+}};
+
+global.document = {{
+  getElementById(id) {{
+    if (id === 'session-form-error') {{
+      return errorNode;
+    }}
+    return {{
+      addEventListener() {{}},
+      classList: {{ add() {{}}, remove() {{}} }},
+      innerHTML: '',
+      textContent: '',
+    }};
+  }},
+  querySelectorAll() {{
+    return [];
+  }},
+  createElement() {{
+    return {{
+      textContent: '',
+      innerHTML: '',
+    }};
+  }},
+}};
+
+global.window = {{
+  prompt() {{ return null; }},
+  confirm() {{ return false; }},
+}};
+
+global.alert = () => {{}};
+global.FormData = class {{
+  constructor(form) {{
+    this.form = form;
+  }}
+  get(key) {{
+    return this.form.values[key];
+  }}
+}};
+
+vm.runInThisContext(source, {{ filename: 'app.js' }});
+
+let dashboardLoads = 0;
+loadDashboard = async () => {{
+  dashboardLoads += 1;
+}};
+
+const apiCalls = [];
+api = async (path, options) => {{
+  apiCalls.push({{ path, body: JSON.parse(options.body) }});
+  if (path === '/api/sessions') {{
+    sessionEvent.currentTarget = null;
+  }}
+  if (path === '/api/queues/queue-1/tasks') {{
+    taskEvent.currentTarget = null;
+  }}
+  return {{}};
+}};
+
+const sessionForm = {{
+  values: {{ name: 'Triage flaky tests', workdir: '/repo' }},
+  elements: {{ workdir: {{ value: '/repo' }} }},
+  resetCount: 0,
+  reset() {{
+    this.resetCount += 1;
+    this.values = {{ name: '', workdir: '' }};
+    this.elements.workdir.value = '';
+  }},
+}};
+
+const taskForm = {{
+  dataset: {{ taskForm: 'queue-1' }},
+  values: {{ title: 'Check output', details: 'Look at errors', status: 'pending' }},
+  resetCount: 0,
+  reset() {{
+    this.resetCount += 1;
+  }},
+}};
+
+const sessionEvent = {{
+  currentTarget: sessionForm,
+  preventDefault() {{}},
+}};
+
+const taskEvent = {{
+  currentTarget: taskForm,
+  preventDefault() {{}},
+}};
+
+(async () => {{
+  await submitSession(sessionEvent);
+  await submitTask(taskEvent);
+  if (sessionForm.resetCount !== 1) {{
+    throw new Error(`session reset count: ${{sessionForm.resetCount}}`);
+  }}
+  if (sessionForm.elements.workdir.value !== '/repo') {{
+    throw new Error(`session workdir value: ${{sessionForm.elements.workdir.value}}`);
+  }}
+  if (taskForm.resetCount !== 1) {{
+    throw new Error(`task reset count: ${{taskForm.resetCount}}`);
+  }}
+  if (dashboardLoads !== 2) {{
+    throw new Error(`dashboard loads: ${{dashboardLoads}}`);
+  }}
+  if (apiCalls.length !== 2) {{
+    throw new Error(`api calls: ${{apiCalls.length}}`);
+  }}
+}})().catch(error => {{
+  console.error(error.stack || String(error));
+  process.exit(1);
+}});
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout or "node submit-handler test failed")
 
 
 if __name__ == "__main__":
