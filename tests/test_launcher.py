@@ -24,6 +24,20 @@ class LauncherTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md", "HISTORY.md"], cwd=str(root), check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(root), check=True, capture_output=True, text=True)
 
+    def _init_generic_git_repo(self, root: Path) -> None:
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (root / "app.py").write_text("print('hello')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(root), check=True, capture_output=True, text=True)
+
     def _write_fake_gh(self, script_path: Path) -> None:
         script_path.write_text(
             "#!/usr/bin/env python3\n"
@@ -287,6 +301,95 @@ class LauncherTests(unittest.TestCase):
             gh_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(gh_state["pr"]["payload"]["headRefName"], "mindex/codex-session")
             self.assertIn("Automatic Session Publication", gh_state["pr"]["payload"]["body"])
+            self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
+
+    def test_launch_codex_applies_mindex_behavior_in_generic_git_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "generic-repo"
+            nested = root / "src" / "pkg"
+            remote_root = Path(tmpdir) / "remote.git"
+            bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            state_path = Path(tmpdir) / "fake-gh-state.json"
+            output_path = Path(tmpdir) / "codex-output.json"
+            root.mkdir()
+            nested.mkdir(parents=True)
+            bin_dir.mkdir()
+            self._init_generic_git_repo(root)
+            subprocess.run(["git", "init", "--bare", str(remote_root)], cwd=str(root.parent), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote_root)], cwd=str(root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "push", "-u", "origin", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            fake_codex = bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path('session-note.txt').write_text('generic repo launch\\n', encoding='utf-8')\n"
+                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            fake_gh = bin_dir / "gh"
+            self._write_fake_gh(fake_gh)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "viewer_login": "anchen1011",
+                        "repo_name_with_owner": "anchen1011/other-project",
+                        "repo_owner": "anchen1011",
+                        "repo_url": "https://github.com/anchen1011/other-project",
+                        "default_branch": "main",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(nested)
+                returncode = launch_codex(
+                    ["fix", "bug"],
+                    project_root=find_project_root(),
+                    logs_root=logs_root,
+                    env={
+                        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                        "FAKE_GH_STATE": str(state_path),
+                        "MINDEX_CODEX_BIN": str(fake_codex),
+                        "MINDEX_DISABLE_SCRIPT": "1",
+                        "MINDEX_FAKE_OUTPUT": str(output_path),
+                    },
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cwd"], str(root.resolve()))
+            self.assertEqual(payload["args"], ["fix", "bug"])
+            self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
+
+            current_branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(current_branch, "mindex/codex-session")
+
+            launcher_status_files = list(logs_root.glob("**/*-launcher/status.json"))
+            self.assertTrue(launcher_status_files)
+            latest_status = json.loads(sorted(launcher_status_files)[-1].read_text(encoding="utf-8"))
+            self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/other-project/pull/1")
+            self.assertEqual(latest_status["published_branch"], "mindex/codex-session")
+
+            gh_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(gh_state["pr"]["payload"]["headRefName"], "mindex/codex-session")
             self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
 
 

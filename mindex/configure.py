@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 from typing import Iterable
 
-from mindex.codex_home import default_managed_codex_home, default_vanilla_codex_home
+from mindex.codex_home import default_managed_codex_home, default_managed_logs_root, default_vanilla_codex_home
 from mindex.logging_utils import append_action, create_log_run, write_json, write_status
 
 
@@ -40,11 +40,16 @@ def _assets_root() -> Path:
     return Path(__file__).resolve().parent / "assets" / "skills"
 
 
-def build_dependency_commands(project_root: Path) -> list[str]:
+def build_dependency_commands(project_root: Path | None) -> list[str]:
     conda_exe = shutil.which("conda") or os.environ.get("CONDA_EXE") or "conda"
+    install_target = (
+        f"-e {project_root}"
+        if project_root is not None and (project_root / "setup.py").exists()
+        else "--upgrade mindex"
+    )
     return [
         f"{conda_exe} create -n mindex python=3.11 -y",
-        f"{conda_exe} run -n mindex pip install -e {project_root}",
+        f"{conda_exe} run -n mindex pip install {install_target}",
         "npm install -g @openai/codex",
         "python -m pip install --upgrade openai-codex || pip install --upgrade openai-codex",
         "tmux -V",
@@ -192,13 +197,14 @@ def install_packaged_skills(destination_root: Path, *, dry_run: bool) -> tuple[l
 
 def configure_project(
     *,
-    project_root: Path | str,
+    project_root: Path | str | None = None,
     codex_home: Path | str | None = None,
     codex_config_path: Path | str | None = None,
     logs_root: Path | str | None = None,
     dry_run: bool = False,
 ) -> ConfigureResult:
-    project_root = Path(project_root).resolve()
+    configured_project_root = Path(project_root).resolve() if project_root else None
+    project_root = configured_project_root or Path.cwd().resolve()
     codex_home = (
         Path(codex_home).expanduser().resolve()
         if codex_home
@@ -207,13 +213,14 @@ def configure_project(
     codex_config_path = (
         Path(codex_config_path).expanduser().resolve() if codex_config_path else (codex_home / "config.toml")
     )
-    logs_root = Path(logs_root).resolve() if logs_root else (project_root / "logs")
+    logs_root = Path(logs_root).resolve() if logs_root else default_managed_logs_root()
     instructions_path = codex_home / "mindex_instructions.md"
+    prompt_suffix = f" --project-root {project_root}" if configured_project_root else ""
 
     log_run = create_log_run(
         logs_root,
         "configure",
-        prompt_text=f"mindex configure --project-root {project_root}{' --dry-run' if dry_run else ''}",
+        prompt_text=f"mindex configure{prompt_suffix}{' --dry-run' if dry_run else ''}",
         metadata={
             "project_root": str(project_root),
             "codex_home": str(codex_home),
@@ -289,7 +296,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     configure_parser = subparsers.add_parser("configure", help="Configure the Mindex project environment")
-    configure_parser.add_argument("--project-root", required=True, help="Path to the project root")
+    configure_parser.add_argument(
+        "--project-root",
+        help="Optional path to the current workspace or source checkout; defaults to the current directory",
+    )
     configure_parser.add_argument("--codex-home", help="Override the Codex home directory")
     configure_parser.add_argument("--codex-config", help="Override the Codex config path")
     configure_parser.add_argument("--logs-root", help="Override the logs directory")

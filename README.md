@@ -30,8 +30,9 @@ workflow that acts as the central hub for project setup.
 
 Current commands:
 
+- `mindex configure --dry-run`
+- `python -m mindex.configure configure --dry-run`
 - `mindex configure --project-root <root> --dry-run`
-- `python -m mindex.configure configure --project-root <root> --dry-run`
 
 Implemented behavior:
 
@@ -44,6 +45,8 @@ Implemented behavior:
 - writes managed instructions into `~/.mindex/codex-home/mindex_instructions.md`
 - keeps a separate Mindex-managed Codex home under `~/.mindex/codex-home` by
   default instead of reusing `~/.codex`
+- lets `mindex configure` run without `--project-root`, defaulting to the
+  current directory only when workspace context is needed
 - installs packaged skills into `~/.mindex/codex-home/skills/` or a provided
   Codex home
 - symlinks packaged skills back to the source tree when possible so editable
@@ -61,6 +64,7 @@ Target workflows:
   - support `pip install .` and `pip install -e .`
   - install Mindex so the `mindex` command is ready as the enhanced Codex entry
     point across projects
+  - allow `mindex configure` to be run globally without a project argument
   - keep the original `codex` command available in its normal vanilla state
   - install required dependencies, including Miniconda, Codex, NPM, and Tmux
 

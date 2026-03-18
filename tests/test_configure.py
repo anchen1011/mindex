@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 
+from mindex.codex_home import default_managed_logs_root
 from mindex.configure import configure_project
 
 
@@ -45,6 +46,20 @@ class ConfigureTests(unittest.TestCase):
             result = configure_project(project_root=root, dry_run=True)
 
             self.assertEqual(result.codex_home, (Path.home() / ".mindex" / "codex-home").resolve())
+            self.assertEqual(result.logs_root, default_managed_logs_root())
+
+    def test_configure_defaults_project_root_to_current_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "workspace"
+            root.mkdir()
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                result = configure_project(dry_run=True)
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(result.project_root, root.resolve())
 
     def test_configure_writes_instructions_skills_and_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -94,6 +109,40 @@ class ConfigureTests(unittest.TestCase):
                     "configure",
                     "--project-root",
                     str(root),
+                    "--codex-home",
+                    str(codex_home),
+                    "--logs-root",
+                    str(logs_root),
+                    "--dry-run",
+                ],
+                cwd=str(root),
+                env={
+                    **dict(os.environ),
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["project_root"], str(root.resolve()))
+
+    def test_module_cli_defaults_project_root_to_current_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "workspace"
+            root.mkdir()
+            codex_home = Path(tmpdir) / "codex-home"
+            logs_root = Path(tmpdir) / "logs"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "mindex.configure",
+                    "configure",
                     "--codex-home",
                     str(codex_home),
                     "--logs-root",
