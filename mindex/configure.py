@@ -84,6 +84,7 @@ Mindex-enhanced Codex entry point for this repository by default unless
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
+- Apply that branch-and-PR publication policy even when the user only asks for code, docs, tests, or behavior changes and does not explicitly mention repo workflow, Git, GitHub, branches, or PRs.
 - Treat `README.md` updates as part of feature completion when the workflow changes.
 
 ## GitHub workflow policy

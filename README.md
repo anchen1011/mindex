@@ -215,6 +215,9 @@ The repo skill is intended to:
   interaction; starting from a protected branch should create a new feature
   branch and PR, while follow-up work on the same feature branch should update
   that branch's existing PR
+- that automatic branch-and-PR publication behavior is still the default even
+  when the user only asks for code, docs, tests, or behavior changes and does
+  not explicitly mention repo workflow, Git, GitHub, branches, or PRs
 - never push directly to `main`, `master`, `production`, or another protected
   release branch
 - never work on or overwrite another person's branch unless the user explicitly

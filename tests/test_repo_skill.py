@@ -26,6 +26,7 @@ class RepoSkillTests(unittest.TestCase):
         self.assertIn("Codex wrapper", text)
         self.assertIn("pushed to GitHub through feature branches and PRs", text)
         self.assertIn("mindex publish-pr", text)
+        self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", text)
         self.assertIn("never allow Mindex-managed behavior to push directly", text)
         self.assertIn("PR URL was confirmed", text)
 
@@ -48,6 +49,7 @@ class RepoSkillTests(unittest.TestCase):
         self.assertIn("publish meaningful work to GitHub through a PR workflow", repo_text)
         self.assertIn("avoid direct work on `main`, `master`, `production`", repo_text)
         self.assertIn("prefer a fork owned by the user", repo_text)
+        self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", repo_text)
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
         self.assertIn("Mindex-enhanced Codex entry point", configure_text)

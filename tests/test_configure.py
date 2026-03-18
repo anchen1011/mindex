@@ -55,6 +55,7 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("Use one branch per feature and one PR per feature.", instructions_text)
             self.assertIn("Never push directly to `main`, `master`, `production`", instructions_text)
             self.assertIn("fork it to the user's own GitHub account whenever possible", instructions_text)
+            self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", instructions_text)
             self.assertTrue((codex_home / "skills" / "configure" / "SKILL.md").exists())
             self.assertTrue((codex_home / "skills" / "repo" / "SKILL.md").exists())
             self.assertIn("[profiles.mindex]", config_text)
