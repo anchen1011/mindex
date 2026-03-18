@@ -222,6 +222,9 @@ Implemented behavior:
   output inline
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
   requests, and rate-limits repeated login failures
+- supports explicit `--disable-origin-checks` and `--disable-csrf-checks`
+  overrides for operators who need to bypass those protections in public or
+  cross-origin deployments
 - persists session queue state under `.mindex/task_queues.json`, including
   queue names, queue descriptions, and ordered task lists per managed session
 - lets users add, edit, delete, and drag-to-reorder tasks inside each

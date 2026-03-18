@@ -49,6 +49,8 @@ class UiConfig:
     state_file: Path
     queue_log_dir: Path
     allow_remote: bool
+    disable_origin_checks: bool
+    disable_csrf_checks: bool
     allowed_origins: tuple[str, ...]
     config_path: Path
 
@@ -102,6 +104,8 @@ def _build_config_payload(
     state_file: Path,
     queue_log_dir: Path,
     allow_remote: bool,
+    disable_origin_checks: bool = False,
+    disable_csrf_checks: bool = False,
     allowed_origins: list[str] | None = None,
 ) -> dict[str, Any]:
     salt = secrets.token_bytes(16)
@@ -122,6 +126,8 @@ def _build_config_payload(
             "host": host,
             "port": port,
             "allow_remote": allow_remote,
+            "disable_origin_checks": disable_origin_checks,
+            "disable_csrf_checks": disable_csrf_checks,
             "allowed_origins": allowed_origins or [],
         },
         "storage": {
@@ -162,6 +168,8 @@ def load_or_create_ui_config(
     port: int = 8765,
     title: str = "Mindex Control Deck",
     allow_remote: bool = False,
+    disable_origin_checks: bool = False,
+    disable_csrf_checks: bool = False,
 ) -> UiBootstrap:
     resolved_root = Path(project_root).resolve()
     default_config_path, default_state_file, default_queue_log_dir = _default_ui_paths(resolved_root)
@@ -179,6 +187,8 @@ def load_or_create_ui_config(
             state_file=default_state_file,
             queue_log_dir=default_queue_log_dir,
             allow_remote=allow_remote,
+            disable_origin_checks=disable_origin_checks,
+            disable_csrf_checks=disable_csrf_checks,
         )
         _write_private_json(resolved_config_path, payload)
         return UiBootstrap(
@@ -240,6 +250,12 @@ def load_or_create_ui_config(
     if "allow_remote" not in server_payload:
         server_payload["allow_remote"] = allow_remote
         migrated = True
+    if "disable_origin_checks" not in server_payload:
+        server_payload["disable_origin_checks"] = disable_origin_checks
+        migrated = True
+    if "disable_csrf_checks" not in server_payload:
+        server_payload["disable_csrf_checks"] = disable_csrf_checks
+        migrated = True
     if "allowed_origins" not in server_payload:
         server_payload["allowed_origins"] = []
         migrated = True
@@ -257,6 +273,8 @@ def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
     host = str(server_payload.get("host", "127.0.0.1"))
     port = int(server_payload.get("port", 8765))
     allow_remote = bool(server_payload.get("allow_remote", False))
+    disable_origin_checks = bool(server_payload.get("disable_origin_checks", False))
+    disable_csrf_checks = bool(server_payload.get("disable_csrf_checks", False))
     if not allow_remote and host not in {"127.0.0.1", "localhost"}:
         raise ValueError("remote UI binding is disabled; set allow_remote=true explicitly to use a non-local host")
     return UiConfig(
@@ -275,6 +293,8 @@ def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
         state_file=Path(storage_payload["state_file"]).resolve(),
         queue_log_dir=Path(storage_payload["queue_log_dir"]).resolve(),
         allow_remote=allow_remote,
+        disable_origin_checks=disable_origin_checks,
+        disable_csrf_checks=disable_csrf_checks,
         allowed_origins=_normalize_allowed_origins(host, port, list(server_payload.get("allowed_origins", []))),
         config_path=config_path,
     )
@@ -480,9 +500,12 @@ class MindexUiApp:
             "queue_log_dir": str(self.config.queue_log_dir),
             "allowed_origins": list(self.config.allowed_origins),
             "allow_remote": self.config.allow_remote,
+            "disable_origin_checks": self.config.disable_origin_checks,
+            "disable_csrf_checks": self.config.disable_csrf_checks,
             "security": {
                 "localhost_only": not self.config.allow_remote,
-                "csrf_protected": True,
+                "csrf_protected": not self.config.disable_csrf_checks,
+                "origin_checks": not self.config.disable_origin_checks,
                 "rate_limited_logins": True,
                 "hashed_password_store": True,
             },
@@ -1517,6 +1540,8 @@ class UiRequestHandler(BaseHTTPRequestHandler):
             _json_response(self, HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
             return None
         if require_csrf:
+            if self.app.config.disable_csrf_checks:
+                return session
             supplied = self.headers.get("X-Mindex-CSRF-Token", "")
             if not hmac.compare_digest(supplied, session.csrf_token):
                 _json_response(self, HTTPStatus.FORBIDDEN, {"error": "invalid csrf token"})
@@ -1525,6 +1550,8 @@ class UiRequestHandler(BaseHTTPRequestHandler):
 
     def _check_origin(self, *, require_auth: bool) -> str | None:
         if self.command in {"GET", "HEAD", "OPTIONS"}:
+            return None
+        if self.app.config.disable_origin_checks:
             return None
         origin = self.headers.get("Origin")
         if not origin:
@@ -1583,12 +1610,32 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
     init_parser.add_argument("--title", default="Mindex Control Deck", help="Browser title for the UI")
     init_parser.add_argument("--allow-remote", action="store_true", help="Allow non-localhost binding")
+    init_parser.add_argument(
+        "--disable-origin-checks",
+        action="store_true",
+        help="Disable Origin/Referer enforcement for authenticated UI requests",
+    )
+    init_parser.add_argument(
+        "--disable-csrf-checks",
+        action="store_true",
+        help="Disable CSRF-token enforcement for authenticated state-changing UI requests",
+    )
 
     serve_parser = subparsers.add_parser("serve", help="Serve the local Mindex UI")
     serve_parser.add_argument("--project-root", help="Project root to manage; defaults to the detected workspace")
     serve_parser.add_argument("--config", help="Override the UI config path")
     serve_parser.add_argument("--host", help="Override the configured host")
     serve_parser.add_argument("--port", type=int, help="Override the configured port")
+    serve_parser.add_argument(
+        "--disable-origin-checks",
+        action="store_true",
+        help="Disable Origin/Referer enforcement for authenticated UI requests",
+    )
+    serve_parser.add_argument(
+        "--disable-csrf-checks",
+        action="store_true",
+        help="Disable CSRF-token enforcement for authenticated state-changing UI requests",
+    )
     return parser
 
 
@@ -1607,6 +1654,8 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             title=args.title,
             allow_remote=args.allow_remote,
+            disable_origin_checks=args.disable_origin_checks,
+            disable_csrf_checks=args.disable_csrf_checks,
         )
         payload = asdict(bootstrap.config)
         for key, value in list(payload.items()):
@@ -1622,12 +1671,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         bootstrap = load_or_create_ui_config(project_root=project_root, config_path=args.config)
         config = bootstrap.config
-        if args.host or args.port:
+        if args.host or args.port or args.disable_origin_checks or args.disable_csrf_checks:
             payload = json.loads(config.config_path.read_text(encoding="utf-8"))
             if args.host:
                 payload.setdefault("server", {})["host"] = args.host
             if args.port:
                 payload.setdefault("server", {})["port"] = args.port
+            if args.disable_origin_checks:
+                payload.setdefault("server", {})["disable_origin_checks"] = True
+            if args.disable_csrf_checks:
+                payload.setdefault("server", {})["disable_csrf_checks"] = True
             _write_private_json(config.config_path, payload)
             config = _parse_ui_config(payload, config.config_path)
         if bootstrap.generated_password:
