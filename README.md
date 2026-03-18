@@ -47,6 +47,8 @@ Implemented behavior:
   default instead of reusing `~/.codex`
 - lets `mindex configure` run without `--project-root`, defaulting to the
   current directory only when workspace context is needed
+- prints the active `CODEX_HOME`, managed instructions file, and logs root
+  during configure so the user can see the current Mindex runtime targets
 - installs packaged skills into `~/.mindex/codex-home/skills/` or a provided
   Codex home
 - symlinks packaged skills back to the source tree when possible so editable

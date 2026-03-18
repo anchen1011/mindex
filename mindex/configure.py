@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 from typing import Iterable
 
 from mindex.codex_home import default_managed_codex_home, default_managed_logs_root, default_vanilla_codex_home
@@ -307,6 +308,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_configure_summary(result: ConfigureResult) -> None:
+    mode = "dry-run" if result.dry_run else "applied"
+    print(f"Mindex configure ({mode})", file=sys.stderr)
+    print(f"CODEX_HOME: {result.codex_home}", file=sys.stderr)
+    print(f"Instructions file: {result.instructions_path}", file=sys.stderr)
+    print(f"Logs root: {result.logs_root}", file=sys.stderr)
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -321,6 +330,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         logs_root=args.logs_root,
         dry_run=args.dry_run,
     )
+    print_configure_summary(result)
     print(result.to_json())
     return 0
 

@@ -129,6 +129,10 @@ class ConfigureTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertTrue(payload["dry_run"])
             self.assertEqual(payload["project_root"], str(root.resolve()))
+            self.assertIn("Mindex configure (dry-run)", completed.stderr)
+            self.assertIn(f"CODEX_HOME: {codex_home.resolve()}", completed.stderr)
+            self.assertIn(f"Instructions file: {codex_home.resolve() / 'mindex_instructions.md'}", completed.stderr)
+            self.assertIn(f"Logs root: {logs_root.resolve()}", completed.stderr)
 
     def test_module_cli_defaults_project_root_to_current_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -163,6 +167,10 @@ class ConfigureTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertTrue(payload["dry_run"])
             self.assertEqual(payload["project_root"], str(root.resolve()))
+            self.assertIn("Mindex configure (dry-run)", completed.stderr)
+            self.assertIn(f"CODEX_HOME: {codex_home.resolve()}", completed.stderr)
+            self.assertIn(f"Instructions file: {codex_home.resolve() / 'mindex_instructions.md'}", completed.stderr)
+            self.assertIn(f"Logs root: {logs_root.resolve()}", completed.stderr)
 
 
 if __name__ == "__main__":
