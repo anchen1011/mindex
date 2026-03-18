@@ -222,6 +222,10 @@ Implemented behavior:
   with fresh credentials, session secrets, and localhost-first server defaults
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
+- when remote binding is enabled, automatically allows browser origins for the
+  configured port across localhost, loopback IPv6, and discovered machine
+  hostnames/IPs while still honoring explicit `allowed_origins` entries for
+  custom aliases
 - serves a responsive control deck for authentication, recent Mindex activity,
   agent creation, agent lifecycle controls, and session task queues
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing

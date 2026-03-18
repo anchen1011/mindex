@@ -8,11 +8,13 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import html
+import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -145,10 +147,61 @@ def _default_ui_paths(project_root: Path) -> tuple[Path, Path, Path]:
     )
 
 
-def _normalize_allowed_origins(host: str, port: int, explicit: list[str]) -> tuple[str, ...]:
-    defaults = [f"http://127.0.0.1:{port}", f"http://localhost:{port}"]
-    if host not in {"127.0.0.1", "localhost"}:
-        defaults.append(f"http://{host}:{port}")
+def _normalize_origin_host(host: str) -> str:
+    normalized = host.strip().lower()
+    if normalized.startswith("[") and normalized.endswith("]"):
+        normalized = normalized[1:-1]
+    if "%" in normalized:
+        normalized = normalized.split("%", 1)[0]
+    return normalized
+
+
+def _origin_for_host(host: str, port: int) -> str | None:
+    normalized = _normalize_origin_host(host)
+    if not normalized:
+        return None
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return f"http://{normalized}:{port}"
+    if ip.version == 6:
+        return f"http://[{normalized}]:{port}"
+    return f"http://{normalized}:{port}"
+
+
+def _discover_origin_hosts(host: str, *, allow_remote: bool) -> tuple[str, ...]:
+    candidates = {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+    normalized_host = _normalize_origin_host(host)
+    if normalized_host and normalized_host not in {"0.0.0.0", "::"}:
+        candidates.add(normalized_host)
+    if allow_remote or normalized_host in {"0.0.0.0", "::"}:
+        for name in (socket.gethostname(), socket.getfqdn()):
+            normalized_name = _normalize_origin_host(name)
+            if normalized_name:
+                candidates.add(normalized_name)
+        for name in tuple(candidates):
+            try:
+                entries = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+            except OSError:
+                continue
+            for entry in entries:
+                address = entry[4][0]
+                normalized_address = _normalize_origin_host(address)
+                if normalized_address:
+                    candidates.add(normalized_address)
+    return tuple(sorted(candidates))
+
+
+def _normalize_allowed_origins(host: str, port: int, explicit: list[str], *, allow_remote: bool) -> tuple[str, ...]:
+    defaults = []
+    for candidate in _discover_origin_hosts(host, allow_remote=allow_remote):
+        origin = _origin_for_host(candidate, port)
+        if origin:
+            defaults.append(origin)
     return tuple(dict.fromkeys([*defaults, *[value.strip() for value in explicit if value.strip()]]))
 
 
@@ -328,7 +381,12 @@ def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
         state_file=Path(storage_payload["state_file"]).resolve(),
         queue_log_dir=Path(storage_payload["queue_log_dir"]).resolve(),
         allow_remote=allow_remote,
-        allowed_origins=_normalize_allowed_origins(host, port, list(server_payload.get("allowed_origins", []))),
+        allowed_origins=_normalize_allowed_origins(
+            host,
+            port,
+            list(server_payload.get("allowed_origins", [])),
+            allow_remote=allow_remote,
+        ),
         config_path=config_path,
     )
 

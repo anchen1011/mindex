@@ -9,6 +9,7 @@ import unittest
 
 from mindex.cli import main as cli_main
 from mindex.task_queue import AgentManager, TaskQueueManager
+import mindex.ui as ui_module
 from mindex.ui import MindexUiApp, load_or_create_ui_config, reset_ui_config
 
 
@@ -105,6 +106,66 @@ class UiTests(unittest.TestCase):
             self.assertNotEqual(written["auth"]["session_secret"], "legacy-session")
             self.assertEqual(written["server"]["host"], "127.0.0.1")
             self.assertEqual(written["storage"]["state_file"], str(root / ".mindex" / "task_queues.json"))
+
+    def test_remote_ui_config_allows_local_interface_origins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            config_path = root / ".mindex" / "ui_config.json"
+            payload = {
+                "project_root": str(root),
+                "auth": {
+                    "username": "admin",
+                    "password_hash": "hash",
+                    "password_salt": "deadbeef",
+                    "password_iterations": 1000,
+                    "session_secret": "session",
+                    "session_ttl_seconds": 60,
+                    "login_attempts": 5,
+                    "login_window_seconds": 30,
+                },
+                "server": {
+                    "host": "0.0.0.0",
+                    "port": 8765,
+                    "allow_remote": True,
+                    "allowed_origins": ["https://example.com"],
+                },
+                "storage": {
+                    "state_file": str(root / ".mindex" / "task_queues.json"),
+                    "queue_log_dir": str(root / ".mindex" / "queue_logs"),
+                },
+                "ui": {"title": "Remote UI"},
+            }
+
+            original_gethostname = ui_module.socket.gethostname
+            original_getfqdn = ui_module.socket.getfqdn
+            original_getaddrinfo = ui_module.socket.getaddrinfo
+
+            def fake_getaddrinfo(host: str, *args: object, **kwargs: object) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+                if host == "deckbox":
+                    return [(0, 0, 0, "", ("192.168.1.20", 0))]
+                if host == "deckbox.local":
+                    return [(0, 0, 0, "", ("fe80::1234%en0", 0))]
+                return []
+
+            ui_module.socket.gethostname = lambda: "deckbox"
+            ui_module.socket.getfqdn = lambda: "deckbox.local"
+            ui_module.socket.getaddrinfo = fake_getaddrinfo
+            try:
+                config = ui_module._parse_ui_config(payload, config_path)
+            finally:
+                ui_module.socket.gethostname = original_gethostname
+                ui_module.socket.getfqdn = original_getfqdn
+                ui_module.socket.getaddrinfo = original_getaddrinfo
+
+            self.assertIn("http://127.0.0.1:8765", config.allowed_origins)
+            self.assertIn("http://localhost:8765", config.allowed_origins)
+            self.assertIn("http://[::1]:8765", config.allowed_origins)
+            self.assertIn("http://deckbox:8765", config.allowed_origins)
+            self.assertIn("http://deckbox.local:8765", config.allowed_origins)
+            self.assertIn("http://192.168.1.20:8765", config.allowed_origins)
+            self.assertIn("http://[fe80::1234]:8765", config.allowed_origins)
+            self.assertIn("https://example.com", config.allowed_origins)
 
     def test_agent_manager_runs_python_module_agents_without_shelling_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
