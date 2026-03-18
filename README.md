@@ -1,5 +1,14 @@
 # Mindex
 
+Mindex is a Codex wrapper and configuration layer that installs a managed Codex
+environment with repeatable setup, proactive logging, and a GitHub PR-first
+workflow across the tasks and repositories you run through `mindex`.
+
+The important distinction is that Mindex is not a separate coding model. It is
+a wrapper around Codex that installs persistent instructions, skills, and
+profile settings so the coding agent follows the required executive behavior on
+future tasks across projects launched through `mindex`.
+
 ## One-Click Configuration
 
 There are two simple setup paths:
@@ -22,15 +31,6 @@ There are two simple setup paths:
 
 Next, we will keep improving the Harness with a strong focus on **security**,
 **testing**, and **memory**.
-
-Mindex is a Codex wrapper and configuration layer that installs a managed Codex
-environment with repeatable setup, proactive logging, and a GitHub PR-first
-workflow across the tasks and repositories you run through `mindex`.
-
-The important distinction is that Mindex is not a separate coding model. It is
-a wrapper around Codex that installs persistent instructions, skills, and
-profile settings so the coding agent follows the required executive behavior on
-future tasks across projects launched through `mindex`.
 
 ## Current status
 
