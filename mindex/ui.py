@@ -51,6 +51,7 @@ class UiConfig:
     state_file: Path
     queue_log_dir: Path
     allow_remote: bool
+    disable_origin_checks: bool
     allowed_origins: tuple[str, ...]
     config_path: Path
 
@@ -104,6 +105,7 @@ def _build_config_payload(
     state_file: Path,
     queue_log_dir: Path,
     allow_remote: bool,
+    disable_origin_checks: bool = False,
     allowed_origins: list[str] | None = None,
 ) -> dict[str, Any]:
     salt = secrets.token_bytes(16)
@@ -124,6 +126,7 @@ def _build_config_payload(
             "host": host,
             "port": port,
             "allow_remote": allow_remote,
+            "disable_origin_checks": disable_origin_checks,
             "allowed_origins": allowed_origins or [],
         },
         "storage": {
@@ -215,6 +218,7 @@ def load_or_create_ui_config(
     port: int = 8765,
     title: str = "Mindex Control Deck",
     allow_remote: bool = False,
+    disable_origin_checks: bool = False,
 ) -> UiBootstrap:
     resolved_root = Path(project_root).resolve()
     default_config_path, default_state_file, default_queue_log_dir = _default_ui_paths(resolved_root)
@@ -232,6 +236,7 @@ def load_or_create_ui_config(
             state_file=default_state_file,
             queue_log_dir=default_queue_log_dir,
             allow_remote=allow_remote,
+            disable_origin_checks=disable_origin_checks,
         )
         _write_private_json(resolved_config_path, payload)
         return UiBootstrap(
@@ -293,6 +298,9 @@ def load_or_create_ui_config(
     if "allow_remote" not in server_payload:
         server_payload["allow_remote"] = allow_remote
         migrated = True
+    if "disable_origin_checks" not in server_payload:
+        server_payload["disable_origin_checks"] = disable_origin_checks
+        migrated = True
     if "allowed_origins" not in server_payload:
         server_payload["allowed_origins"] = []
         migrated = True
@@ -312,6 +320,7 @@ def reset_ui_config(
     port: int = 8765,
     title: str = "Mindex Control Deck",
     allow_remote: bool = False,
+    disable_origin_checks: bool = False,
 ) -> UiBootstrap:
     resolved_root = Path(project_root).resolve()
     default_config_path, default_state_file, default_queue_log_dir = _default_ui_paths(resolved_root)
@@ -328,6 +337,7 @@ def reset_ui_config(
         state_file=default_state_file,
         queue_log_dir=default_queue_log_dir,
         allow_remote=allow_remote,
+        disable_origin_checks=disable_origin_checks,
     )
     _write_private_json(resolved_config_path, payload)
     return UiBootstrap(
@@ -353,6 +363,11 @@ def _add_ui_config_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=8765, help="Port to bind")
     parser.add_argument("--title", default="Mindex Control Deck", help="Browser title for the UI")
     parser.add_argument("--allow-remote", action="store_true", help="Allow non-localhost binding")
+    parser.add_argument(
+        "--disable-origin-checks",
+        action="store_true",
+        help="Disable Origin/Referer enforcement for authenticated UI requests",
+    )
 
 
 def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
@@ -363,6 +378,7 @@ def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
     host = str(server_payload.get("host", "127.0.0.1"))
     port = int(server_payload.get("port", 8765))
     allow_remote = bool(server_payload.get("allow_remote", False))
+    disable_origin_checks = bool(server_payload.get("disable_origin_checks", False))
     if not allow_remote and host not in {"127.0.0.1", "localhost"}:
         raise ValueError("remote UI binding is disabled; set allow_remote=true explicitly to use a non-local host")
     return UiConfig(
@@ -381,6 +397,7 @@ def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
         state_file=Path(storage_payload["state_file"]).resolve(),
         queue_log_dir=Path(storage_payload["queue_log_dir"]).resolve(),
         allow_remote=allow_remote,
+        disable_origin_checks=disable_origin_checks,
         allowed_origins=_normalize_allowed_origins(
             host,
             port,
@@ -522,9 +539,11 @@ class MindexUiApp:
             "queue_log_dir": str(self.config.queue_log_dir),
             "allowed_origins": list(self.config.allowed_origins),
             "allow_remote": self.config.allow_remote,
+            "disable_origin_checks": self.config.disable_origin_checks,
             "security": {
                 "localhost_only": not self.config.allow_remote,
                 "csrf_protected": True,
+                "origin_checks": not self.config.disable_origin_checks,
                 "rate_limited_logins": True,
                 "hashed_password_store": True,
             },
@@ -1562,6 +1581,8 @@ class UiRequestHandler(BaseHTTPRequestHandler):
     def _check_origin(self, *, require_auth: bool) -> str | None:
         if self.command in {"GET", "HEAD", "OPTIONS"}:
             return None
+        if self.app.config.disable_origin_checks:
+            return None
         origin = self.headers.get("Origin")
         if not origin:
             referer = self.headers.get("Referer")
@@ -1621,6 +1642,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--config", help="Override the UI config path")
     serve_parser.add_argument("--host", help="Override the configured host")
     serve_parser.add_argument("--port", type=int, help="Override the configured port")
+    serve_parser.add_argument(
+        "--disable-origin-checks",
+        action="store_true",
+        help="Disable Origin/Referer enforcement for authenticated UI requests",
+    )
     return parser
 
 
@@ -1639,6 +1665,7 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             title=args.title,
             allow_remote=args.allow_remote,
+            disable_origin_checks=args.disable_origin_checks,
         )
         payload = _config_as_payload(bootstrap.config)
         if bootstrap.generated_password:
@@ -1658,6 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             title=args.title,
             allow_remote=args.allow_remote,
+            disable_origin_checks=args.disable_origin_checks,
         )
         payload = _config_as_payload(bootstrap.config)
         if bootstrap.generated_password:
@@ -1668,12 +1696,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         bootstrap = load_or_create_ui_config(project_root=project_root, config_path=args.config)
         config = bootstrap.config
-        if args.host or args.port:
+        if args.host or args.port or args.disable_origin_checks:
             payload = json.loads(config.config_path.read_text(encoding="utf-8"))
             if args.host:
                 payload.setdefault("server", {})["host"] = args.host
             if args.port:
                 payload.setdefault("server", {})["port"] = args.port
+            if args.disable_origin_checks:
+                payload.setdefault("server", {})["disable_origin_checks"] = True
             _write_private_json(config.config_path, payload)
             config = _parse_ui_config(payload, config.config_path)
         if bootstrap.generated_password:

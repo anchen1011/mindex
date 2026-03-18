@@ -226,6 +226,9 @@ Implemented behavior:
   configured port across localhost, loopback IPv6, and discovered machine
   hostnames/IPs while still honoring explicit `allowed_origins` entries for
   custom aliases
+- supports an explicit `disable_origin_checks=true` server override, plus the
+  `--disable-origin-checks` CLI flag, for deployments that must accept browser
+  requests from arbitrary public origins despite the weaker CSRF posture
 - serves a responsive control deck for authentication, recent Mindex activity,
   agent creation, agent lifecycle controls, and session task queues
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
