@@ -67,6 +67,13 @@ def resolve_codex_command(env: dict[str, str] | None = None) -> str:
     return os.environ.get("MINDEX_CODEX_BIN", "codex")
 
 
+def default_codex_args(argv: Iterable[str]) -> list[str]:
+    args = list(argv)
+    if "--yolo" in args:
+        return args
+    return ["--yolo", *args]
+
+
 def launch_codex(
     argv: Iterable[str],
     *,
@@ -75,6 +82,7 @@ def launch_codex(
     env: dict[str, str] | None = None,
 ) -> int:
     args = list(argv)
+    command_args = default_codex_args(args)
     launch_root = find_project_root(project_root)
     run_env = os.environ.copy()
     if env:
@@ -84,7 +92,7 @@ def launch_codex(
     run_env["MINDEX_CODEX_HOME"] = str(managed_codex_home)
     run_env["CODEX_HOME"] = str(managed_codex_home)
     run_env["MINDEX_PROJECT_ROOT"] = str(launch_root)
-    command = [resolve_codex_command(run_env), *args]
+    command = [resolve_codex_command(run_env), *command_args]
 
     log_run = create_log_run(
         resolved_logs_root,
