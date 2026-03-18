@@ -1003,7 +1003,9 @@ function renderDashboard(payload) {
 
 async function submitSession(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
+  const workdirValue = String(form.get('workdir') || '');
   const errorNode = document.getElementById('session-form-error');
   errorNode.classList.add('hidden');
   try {
@@ -1014,8 +1016,8 @@ async function submitSession(event) {
         workdir: form.get('workdir'),
       }),
     });
-    event.currentTarget.reset();
-    event.currentTarget.elements.workdir.value = form.get('workdir');
+    formElement.reset();
+    formElement.elements.workdir.value = workdirValue;
     await loadDashboard();
   } catch (error) {
     errorNode.textContent = error.message;
@@ -1045,8 +1047,9 @@ async function renameQueue(queueId, currentName, currentDescription) {
 
 async function submitTask(event) {
   event.preventDefault();
-  const queueId = event.currentTarget.dataset.taskForm;
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const queueId = formElement.dataset.taskForm;
+  const form = new FormData(formElement);
   try {
     await api(`/api/queues/${queueId}/tasks`, {
       method: 'POST',
@@ -1056,7 +1059,7 @@ async function submitTask(event) {
         status: form.get('status'),
       }),
     });
-    event.currentTarget.reset();
+    formElement.reset();
     await loadDashboard();
   } catch (error) {
     alert(error.message);
