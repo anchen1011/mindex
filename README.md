@@ -5,8 +5,8 @@
 There are two simple setup paths:
 
 1. **Local install:** Clone the repository, then run `pip install -e .`
-2. **Codex install:** Open Codex in the repository and send:
-   `Use the configure skill to install and configure Mindex for this project.`
+2. **Codex install:** Open Codex and send:
+   `Use https://github.com/anchen1011/mindex configure skill to install and configure codex.`
 
 ## Project Highlights
 
