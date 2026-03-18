@@ -1,13 +1,13 @@
 # Mindex
 
-Mindex is a project-specific Codex wrapper and configuration layer for working
-on the `mindex` repository with repeatable setup, proactive logging, and a
-GitHub PR-first workflow.
+Mindex is a Codex wrapper and configuration layer that installs a managed Codex
+environment with repeatable setup, proactive logging, and a GitHub PR-first
+workflow across the tasks and repositories you run through `mindex`.
 
 The important distinction is that Mindex is not a separate coding model. It is
-a wrapper around Codex that installs persistent repository instructions, skills,
-and profile settings so the coding agent follows the project's required
-executive behavior on future tasks.
+a wrapper around Codex that installs persistent instructions, skills, and
+profile settings so the coding agent follows the required executive behavior on
+future tasks across projects launched through `mindex`.
 
 ## Current status
 
@@ -39,12 +39,12 @@ Implemented behavior:
   `mindex` command and runs Mindex auto-configure by default unless
   `MINDEX_SKIP_AUTO_CONFIGURE=1`
 - that install flow turns `mindex` into the Mindex-enhanced Codex entry point
-  for this repository by writing the managed instructions, packaged skills, and
-  profile settings described here
-- writes project instructions into `.mindex/codex_instructions.md`
-- keeps a separate Mindex-managed Codex home under `.mindex/codex-home` by
+  by writing the managed instructions, packaged skills, and profile settings
+  described here
+- writes managed instructions into `~/.mindex/codex-home/mindex_instructions.md`
+- keeps a separate Mindex-managed Codex home under `~/.mindex/codex-home` by
   default instead of reusing `~/.codex`
-- installs packaged skills into `.mindex/codex-home/skills/` or a provided
+- installs packaged skills into `~/.mindex/codex-home/skills/` or a provided
   Codex home
 - symlinks packaged skills back to the source tree when possible so editable
   installs pick up skill edits from the repo immediately
@@ -60,7 +60,7 @@ Target workflows:
 - **New installation**
   - support `pip install .` and `pip install -e .`
   - install Mindex so the `mindex` command is ready as the enhanced Codex entry
-    point for this repository
+    point across projects
   - keep the original `codex` command available in its normal vanilla state
   - install required dependencies, including Miniconda, Codex, NPM, and Tmux
 
@@ -69,9 +69,10 @@ Target workflows:
     Mindex or to run `mindex configure` directly
   - apply the same managed instructions, packaged skills, and Mindex profile to
     that Codex environment
-  - configure Codex with all of the repository rules defined here while still
-    leaving the base `codex` command behavior untouched unless the user chooses
-    the Mindex-managed setup
+  - configure Codex with the Mindex coding-agent rules across the tasks and
+    repositories launched through `mindex` while still leaving the base
+    `codex` command behavior untouched unless the user chooses the
+    Mindex-managed setup
 
 ### 2. Logging system
 
@@ -106,23 +107,24 @@ Requirements:
 - `mindex` becomes the preferred project command
 - the original `codex` command remains available and retains its normal
   behavior
-- project-specific configuration is applied through Mindex rather than by
-  replacing the global Codex installation
+- Mindex-managed configuration is applied through `mindex` across projects
+  rather than by replacing the global Codex installation
 
 Current implementation:
 
 - the package exposes `mindex` as a console script and intended enhanced Codex
-  entry point for this repository
+  entry point across projects
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
-  `.mindex/codex-home` by default
+  `~/.mindex/codex-home` by default
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
   URL on GitHub
 - `mindex publish-pr ...` regenerates the PR title/body from the full branch
   scope so the PR reflects every commit included in that branch, not just the
   latest change
-- other `mindex ...` invocations proxy to `codex` from the repo root
+- other `mindex ...` invocations proxy to `codex` from the detected workspace
+  root
 - plain `codex` still exists as the unchanged vanilla command outside the
   Mindex-managed workflow
 - when a `mindex`-launched Codex session starts on `main`, `master`,

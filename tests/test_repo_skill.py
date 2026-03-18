@@ -53,9 +53,10 @@ class RepoSkillTests(unittest.TestCase):
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
         self.assertIn("Mindex-enhanced Codex entry point", configure_text)
-        self.assertIn("plain `codex` stays available in its original", configure_text)
-        self.assertIn("default Mindex-managed Codex home under `.mindex/codex-home`", configure_text)
+        self.assertIn("plain `codex` stays available", configure_text)
+        self.assertIn("default Mindex-managed Codex home under `~/.mindex/codex-home`", configure_text)
         self.assertIn("editable-install skill edits take effect", configure_text)
+        self.assertIn("across projects", configure_text)
         self.assertIn("if the user asks Codex to configure Mindex", configure_text)
         self.assertIn(
             "enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes",

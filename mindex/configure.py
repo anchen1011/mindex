@@ -51,27 +51,29 @@ def build_dependency_commands(project_root: Path) -> list[str]:
     ]
 
 
-def render_instructions(project_root: Path) -> str:
-    return f"""# Mindex Codex Instructions
+def render_instructions() -> str:
+    return """# Mindex Codex Instructions
 
-You are working in `{project_root}` through the Mindex Codex wrapper.
+You are working through the Mindex Codex wrapper.
 
-Mindex is a project-specific Codex wrapper. Treat these instructions as the
-operating policy for future repository work, not as a one-off task note.
+Mindex is a managed Codex wrapper. Treat these instructions as the operating
+policy for any future task or repository work launched through `mindex`, not as
+a one-off task note that only applies to a single project.
 
 Installing Mindex through `pip install` prepares `mindex` as the
-Mindex-enhanced Codex entry point for this repository by default unless
+Mindex-enhanced Codex entry point by default unless
 `MINDEX_SKIP_AUTO_CONFIGURE=1`.
 
-Mindex keeps its managed Codex home under `.mindex/codex-home` by default so
-plain `~/.codex` stays vanilla while Mindex loads its own managed skills.
+Mindex keeps its managed Codex home under `~/.mindex/codex-home` by default so
+plain `~/.codex` stays vanilla while Mindex loads its own managed skills
+globally across workspaces.
 
 ## Operating rules
 
 - Run explicit tests for every meaningful change and record the results under `logs/`.
 - Keep the original `codex` command untouched; it remains the plain vanilla Codex command.
-- Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings for this repository.
-- Load Mindex-managed skills from `.mindex/codex-home/skills` instead of reusing `~/.codex/skills`.
+- Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings across projects.
+- Load Mindex-managed skills from `~/.mindex/codex-home/skills` instead of reusing `~/.codex/skills`.
 - If a user asks Codex to configure Mindex, apply the same managed instructions, packaged skills, and profile block to that Codex environment.
 - Publish meaningful AI-generated changes to GitHub instead of leaving them only on the local machine.
 - Use one branch per feature and one PR per feature.
@@ -83,7 +85,7 @@ plain `~/.codex` stays vanilla while Mindex loads its own managed skills.
 - Ensure each PR title and description reflect the full branch scope rather than only the newest commit.
 - Verify that each PR actually exists on GitHub and capture the PR URL before considering publication complete.
 - Apply that branch-and-PR publication policy even when the user only asks for code, docs, tests, or behavior changes and does not explicitly mention repo workflow, Git, GitHub, branches, or PRs.
-- Treat `README.md` updates as part of feature completion when the workflow changes.
+- Treat local documentation updates as part of feature completion when the workflow changes.
 
 ## GitHub workflow policy
 
@@ -100,14 +102,13 @@ plain `~/.codex` stays vanilla while Mindex loads its own managed skills.
 
 - `mindex configure` manages this file, the Mindex-managed Codex home, packaged skills, and the Codex profile block.
 - `logs/` is a local artifact; do not commit it.
-- Use the packaged `repo` skill when working on this repository and the packaged `configure` skill when setting up new environments.
+- Use the packaged `repo` skill when working on the Mindex repository itself and the packaged `configure` skill when setting up new environments.
 """
 
 
-def render_managed_profile_block(project_root: Path, instructions_path: Path) -> str:
-    root_text = project_root.as_posix()
+def render_managed_profile_block(codex_home: Path, instructions_path: Path) -> str:
     instructions_text = instructions_path.as_posix()
-    managed_home_text = (project_root / ".mindex" / "codex-home").as_posix()
+    managed_home_text = codex_home.as_posix()
     return "\n".join(
         [
             MANAGED_BLOCK_START,
@@ -116,11 +117,9 @@ def render_managed_profile_block(project_root: Path, instructions_path: Path) ->
             'reasoning_effort = "high"',
             'approval_policy = "on-request"',
             'sandbox_mode = "workspace-write"',
-            f'cwd = "{root_text}"',
             "",
             "[profiles.mindex.env]",
             f'CODEX_HOME = "{managed_home_text}"',
-            f'MINDEX_PROJECT_ROOT = "{root_text}"',
             f'MINDEX_INSTRUCTIONS_FILE = "{instructions_text}"',
             MANAGED_BLOCK_END,
             "",
@@ -203,13 +202,13 @@ def configure_project(
     codex_home = (
         Path(codex_home).expanduser().resolve()
         if codex_home
-        else default_managed_codex_home(project_root)
+        else default_managed_codex_home()
     )
     codex_config_path = (
         Path(codex_config_path).expanduser().resolve() if codex_config_path else (codex_home / "config.toml")
     )
     logs_root = Path(logs_root).resolve() if logs_root else (project_root / "logs")
-    instructions_path = project_root / ".mindex" / "codex_instructions.md"
+    instructions_path = codex_home / "mindex_instructions.md"
 
     log_run = create_log_run(
         logs_root,
@@ -246,8 +245,8 @@ def configure_project(
         installed_skills, skill_install_mode = install_packaged_skills(skills_root, dry_run=dry_run)
         append_action(log_run, f"Packaged skills ({skill_install_mode}): {', '.join(installed_skills)}")
 
-        instructions_text = render_instructions(project_root)
-        managed_block = render_managed_profile_block(project_root, instructions_path)
+        instructions_text = render_instructions()
+        managed_block = render_managed_profile_block(codex_home, instructions_path)
 
         if not dry_run:
             instructions_path.parent.mkdir(parents=True, exist_ok=True)

@@ -11,8 +11,9 @@ Use this repository-local skill when the agent is changing the `mindex` project
 itself rather than configuring some other repository with the packaged Mindex
 skills.
 
-Mindex is a project-specific Codex wrapper, so changes in this repository shape
-the standing instructions that govern how Codex behaves on future work.
+Mindex is a managed Codex wrapper, so changes in this repository shape the
+standing instructions that govern how Codex behaves on future work across
+projects launched through `mindex`.
 
 ## Scope
 
@@ -31,7 +32,7 @@ This skill is for development work inside this repository only.
 - update `README.md` whenever a meaningful workflow or feature changes
 - keep the packaged skills under `mindex/assets/skills/` in sync with shipped behavior
 - prefer focused changes that strengthen the `mindex` package instead of adding repo-only hacks
-- keep `codex` unchanged; project-specific behavior belongs in `mindex`
+- keep `codex` unchanged; Mindex-managed behavior belongs in `mindex`
 - treat branch-per-feature and PR-first development as the default workflow
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
 - use `mindex publish-pr` or an equivalent verified workflow before considering meaningful repository work complete

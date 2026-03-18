@@ -103,6 +103,15 @@ class LauncherTests(unittest.TestCase):
 
             self.assertEqual(find_project_root(nested), root.resolve())
 
+    def test_find_project_root_prefers_git_toplevel_for_generic_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            nested = root / "src" / "module"
+            nested.mkdir(parents=True)
+            subprocess.run(["git", "init", "-b", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            self.assertEqual(find_project_root(nested), root.resolve())
+
     def test_launch_codex_proxies_from_repo_root_and_logs_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -142,7 +151,7 @@ class LauncherTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
             self.assertEqual(payload["args"], ["status", "--json"])
-            self.assertEqual(payload["codex_home"], str((root / ".mindex" / "codex-home").resolve()))
+            self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             status_files = list(logs_root.glob("**/status.json"))
             self.assertEqual(len(status_files), 1)
@@ -269,9 +278,9 @@ class LauncherTests(unittest.TestCase):
             ).stdout.strip()
             self.assertEqual(current_branch, "mindex/codex-session")
 
-            status_files = list(logs_root.glob("**/status.json"))
-            self.assertTrue(status_files)
-            latest_status = json.loads(sorted(status_files)[-1].read_text(encoding="utf-8"))
+            launcher_status_files = list(logs_root.glob("**/*-launcher/status.json"))
+            self.assertTrue(launcher_status_files)
+            latest_status = json.loads(sorted(launcher_status_files)[-1].read_text(encoding="utf-8"))
             self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/mindex/pull/1")
             self.assertEqual(latest_status["published_branch"], "mindex/codex-session")
 

@@ -14,6 +14,17 @@ from mindex.logging_utils import append_action, create_log_run, write_status
 
 def find_project_root(start: Path | str | None = None) -> Path:
     current = Path(start or Path.cwd()).resolve()
+    git_root = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(current),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if git_root.returncode == 0:
+        resolved = git_root.stdout.strip()
+        if resolved:
+            return Path(resolved).resolve()
     for candidate in (current, *current.parents):
         if (candidate / "README.md").exists() and (candidate / "HISTORY.md").exists():
             return candidate
@@ -39,9 +50,10 @@ def launch_codex(
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
-    managed_codex_home = default_managed_codex_home(launch_root, env=run_env)
+    managed_codex_home = default_managed_codex_home(env=run_env)
     run_env["MINDEX_CODEX_HOME"] = str(managed_codex_home)
     run_env["CODEX_HOME"] = str(managed_codex_home)
+    run_env["MINDEX_PROJECT_ROOT"] = str(launch_root)
     command = [resolve_codex_command(run_env), *args]
 
     log_run = create_log_run(
