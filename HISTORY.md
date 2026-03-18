@@ -126,6 +126,35 @@
 - Make automatic GitHub publication the default launcher behavior so a user
   does not need to request PR creation manually on each interaction.
 
+#### 6. Secure Web UI
+
+- Status: in progress
+- Add a web-accessible Mindex control surface for managing local coding agents
+  and reviewing recent Mindex activity.
+- Default the UI server to localhost-only access and require an explicit
+  opt-in before listening on non-local interfaces.
+- Store UI credentials as salted password hashes instead of plaintext values.
+- Protect authenticated state-changing requests with CSRF validation and
+  origin checks.
+- Rate-limit repeated login failures and avoid launching agent commands
+  through a shell.
+- Persist queued agent state and per-agent logs under `.mindex/` without
+  committing those runtime artifacts.
+- Support queue-local task management so users can add, edit, delete, and
+  reorder upcoming tasks inside a session queue.
+
+#### 7. Default Branch, Commit, and PR Automation
+
+- Status: in progress
+- Verify that new feature work defaults to a fresh feature branch rather than
+  reusing unrelated in-flight work.
+- Verify that corresponding commits are created as part of the default
+  publication flow instead of leaving feature work uncommitted.
+- Verify that PR creation or update remains the default completion path for
+  meaningful Mindex-managed feature work.
+- Reinforce those defaults in the packaged skills and managed instructions so
+  users do not need to explicitly request branch creation, commits, or PRs.
+
 ### Notes
 
 - This file is being maintained as the current project history and requirement
