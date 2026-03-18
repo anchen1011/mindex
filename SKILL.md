@@ -11,8 +11,9 @@ Use this repository-local skill when the agent is changing the `mindex` project
 itself rather than configuring some other repository with the packaged Mindex
 skills.
 
-Mindex is a project-specific Codex wrapper, so changes in this repository shape
-the standing instructions that govern how Codex behaves on future work.
+Mindex is a managed Codex wrapper, so changes in this repository shape the
+standing instructions that govern how Codex behaves on future work across
+projects launched through `mindex`.
 
 ## Scope
 
@@ -31,13 +32,15 @@ This skill is for development work inside this repository only.
 - update `README.md` whenever a meaningful workflow or feature changes
 - keep the packaged skills under `mindex/assets/skills/` in sync with shipped behavior
 - prefer focused changes that strengthen the `mindex` package instead of adding repo-only hacks
-- keep `codex` unchanged; project-specific behavior belongs in `mindex`
+- keep `codex` unchanged; Mindex-managed behavior belongs in `mindex`
 - treat branch-per-feature and PR-first development as the default workflow
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
+- use `mindex publish-pr` or an equivalent verified workflow before considering meaningful repository work complete
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
 - require Mindex-managed PR titles and bodies to describe the complete branch scope, not just the newest commit
 - treat automatic GitHub publication as the default completion path for each meaningful interaction, using a new branch/PR for new feature work and the existing PR only for true follow-up work on that branch
 - when multiple agents or parallel efforts are working toward different goals, keep each goal on its own branch and PR instead of mixing them together
+- apply that publication default even when the user only asks for code, docs, tests, or behavior changes and does not explicitly mention repo workflow, Git, GitHub, branches, or PRs
 - never allow Mindex-managed behavior to push directly to `main`, `master`, `production`, or another person's branch
 
 ## Expected validation
@@ -58,3 +61,4 @@ relevant validation and record the result in `logs/`.
 2. The repo-local skill and packaged skills still agree on the important rules.
 3. Tests or validation commands were run and recorded.
 4. `README.md` reflects the current feature set and workflow.
+5. Meaningful repository work was published with `mindex publish-pr` or an equivalent verified branch-and-PR workflow, and the PR URL was confirmed.

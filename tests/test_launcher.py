@@ -7,7 +7,6 @@ import tempfile
 import unittest
 import subprocess
 
-from mindex.configure import default_logs_root
 from mindex.launcher import find_project_root, launch_codex
 
 
@@ -23,6 +22,20 @@ class LauncherTests(unittest.TestCase):
             text=True,
         )
         subprocess.run(["git", "add", "README.md", "HISTORY.md"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(root), check=True, capture_output=True, text=True)
+
+    def _init_generic_git_repo(self, root: Path) -> None:
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(root), check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (root / "app.py").write_text("print('hello')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=str(root), check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(root), check=True, capture_output=True, text=True)
 
     def _write_fake_gh(self, script_path: Path) -> None:
@@ -104,6 +117,15 @@ class LauncherTests(unittest.TestCase):
 
             self.assertEqual(find_project_root(nested), root.resolve())
 
+    def test_find_project_root_prefers_git_toplevel_for_generic_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            nested = root / "src" / "module"
+            nested.mkdir(parents=True)
+            subprocess.run(["git", "init", "-b", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            self.assertEqual(find_project_root(nested), root.resolve())
+
     def test_launch_codex_proxies_from_repo_root_and_logs_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -126,11 +148,8 @@ class LauncherTests(unittest.TestCase):
             )
             fake_codex.chmod(0o755)
             output_path = Path(tmpdir) / "codex-output.json"
-            home_dir = Path(tmpdir) / "home"
-            home_dir.mkdir()
 
             env = {
-                "HOME": str(home_dir),
                 "MINDEX_CODEX_BIN": str(fake_codex),
                 "MINDEX_DISABLE_SCRIPT": "1",
                 "MINDEX_FAKE_OUTPUT": str(output_path),
@@ -146,91 +165,13 @@ class LauncherTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
             self.assertEqual(payload["args"], ["status", "--json"])
-            self.assertEqual(payload["codex_home"], str((home_dir / ".codex").resolve()))
+            self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
+
             status_files = list(logs_root.glob("**/status.json"))
             self.assertEqual(len(status_files), 1)
             status = json.loads(status_files[0].read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "success")
             self.assertEqual(status["returncode"], 0)
-
-    def test_launch_codex_defaults_logs_to_mindex_logs_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir) / "repo"
-            nested = root / "nested"
-            fake_bin_dir = Path(tmpdir) / "bin"
-            default_logs = Path(tmpdir) / "mindex-logs"
-            nested.mkdir(parents=True)
-            fake_bin_dir.mkdir()
-            (root / "README.md").write_text("# repo\n", encoding="utf-8")
-            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
-
-            fake_codex = fake_bin_dir / "fake-codex"
-            fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, sys\n"
-                "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
-                "with open(path, 'w', encoding='utf-8') as handle:\n"
-                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
-                encoding="utf-8",
-            )
-            fake_codex.chmod(0o755)
-            output_path = Path(tmpdir) / "codex-output.json"
-
-            env = {
-                "MINDEX_LOGS_ROOT": str(default_logs),
-                "MINDEX_CODEX_BIN": str(fake_codex),
-                "MINDEX_DISABLE_SCRIPT": "1",
-                "MINDEX_FAKE_OUTPUT": str(output_path),
-            }
-            original_cwd = Path.cwd()
-            try:
-                os.chdir(nested)
-                returncode = launch_codex(["status"], project_root=find_project_root(), env=env)
-            finally:
-                os.chdir(original_cwd)
-
-            self.assertEqual(returncode, 0)
-            self.assertFalse((Path.home() / "logs").exists())
-            default_status_files = list(default_logs.glob("**/*-launcher/status.json"))
-            self.assertTrue(default_status_files)
-
-    def test_launch_codex_preserves_explicit_codex_home_override(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir) / "repo"
-            fake_bin_dir = Path(tmpdir) / "bin"
-            logs_root = root / "logs"
-            root.mkdir()
-            fake_bin_dir.mkdir()
-            (root / "README.md").write_text("# repo\n", encoding="utf-8")
-            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
-
-            fake_codex = fake_bin_dir / "fake-codex"
-            fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os\n"
-                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
-                "    json.dump({'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
-                encoding="utf-8",
-            )
-            fake_codex.chmod(0o755)
-            output_path = Path(tmpdir) / "codex-output.json"
-            explicit_codex_home = Path(tmpdir) / "explicit-codex-home"
-
-            returncode = launch_codex(
-                [],
-                project_root=root,
-                logs_root=logs_root,
-                env={
-                    "MINDEX_CODEX_BIN": str(fake_codex),
-                    "MINDEX_DISABLE_SCRIPT": "1",
-                    "MINDEX_FAKE_OUTPUT": str(output_path),
-                    "CODEX_HOME": str(explicit_codex_home),
-                },
-            )
-
-            self.assertEqual(returncode, 0)
-            payload = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["codex_home"], str(explicit_codex_home))
 
     def test_launch_codex_creates_feature_branch_before_running_from_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -351,15 +292,104 @@ class LauncherTests(unittest.TestCase):
             ).stdout.strip()
             self.assertEqual(current_branch, "mindex/codex-session")
 
-            status_files = list(logs_root.glob("**/*-launcher/status.json"))
-            self.assertTrue(status_files)
-            latest_status = json.loads(sorted(status_files)[-1].read_text(encoding="utf-8"))
+            launcher_status_files = list(logs_root.glob("**/*-launcher/status.json"))
+            self.assertTrue(launcher_status_files)
+            latest_status = json.loads(sorted(launcher_status_files)[-1].read_text(encoding="utf-8"))
             self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/mindex/pull/1")
             self.assertEqual(latest_status["published_branch"], "mindex/codex-session")
 
             gh_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(gh_state["pr"]["payload"]["headRefName"], "mindex/codex-session")
             self.assertIn("Automatic Session Publication", gh_state["pr"]["payload"]["body"])
+            self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
+
+    def test_launch_codex_applies_mindex_behavior_in_generic_git_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "generic-repo"
+            nested = root / "src" / "pkg"
+            remote_root = Path(tmpdir) / "remote.git"
+            bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            state_path = Path(tmpdir) / "fake-gh-state.json"
+            output_path = Path(tmpdir) / "codex-output.json"
+            root.mkdir()
+            nested.mkdir(parents=True)
+            bin_dir.mkdir()
+            self._init_generic_git_repo(root)
+            subprocess.run(["git", "init", "--bare", str(remote_root)], cwd=str(root.parent), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote_root)], cwd=str(root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "push", "-u", "origin", "main"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            fake_codex = bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path('session-note.txt').write_text('generic repo launch\\n', encoding='utf-8')\n"
+                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            fake_gh = bin_dir / "gh"
+            self._write_fake_gh(fake_gh)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "viewer_login": "anchen1011",
+                        "repo_name_with_owner": "anchen1011/other-project",
+                        "repo_owner": "anchen1011",
+                        "repo_url": "https://github.com/anchen1011/other-project",
+                        "default_branch": "main",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(nested)
+                returncode = launch_codex(
+                    ["fix", "bug"],
+                    project_root=find_project_root(),
+                    logs_root=logs_root,
+                    env={
+                        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                        "FAKE_GH_STATE": str(state_path),
+                        "MINDEX_CODEX_BIN": str(fake_codex),
+                        "MINDEX_DISABLE_SCRIPT": "1",
+                        "MINDEX_FAKE_OUTPUT": str(output_path),
+                    },
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cwd"], str(root.resolve()))
+            self.assertEqual(payload["args"], ["fix", "bug"])
+            self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
+
+            current_branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(current_branch, "mindex/codex-session")
+
+            launcher_status_files = list(logs_root.glob("**/*-launcher/status.json"))
+            self.assertTrue(launcher_status_files)
+            latest_status = json.loads(sorted(launcher_status_files)[-1].read_text(encoding="utf-8"))
+            self.assertEqual(latest_status["published_pr_url"], "https://github.com/anchen1011/other-project/pull/1")
+            self.assertEqual(latest_status["published_branch"], "mindex/codex-session")
+
+            gh_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(gh_state["pr"]["payload"]["headRefName"], "mindex/codex-session")
             self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
 
 
