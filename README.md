@@ -119,7 +119,9 @@ Current implementation:
 
 - `mindex.logging_utils` creates the log directory layout
 - `mindex configure` writes prompt, action, metadata, and status files
-- `mindex` launcher records command metadata and terminal capture paths
+- `mindex` launcher records command metadata and terminal capture paths in the
+  detected workspace `logs/` directory, or falls back to `~/.mindex/logs`
+  when no project root is available
 - `mindex publish-pr` records branch, push, and PR verification steps under
   `logs/`
 - `mindex` launcher can auto-publish completed coding sessions so each
@@ -163,8 +165,8 @@ Current implementation:
 - after a `mindex`-launched coding session finishes, Mindex auto-publishes the
   resulting branch changes to GitHub by default, creating a new PR when needed
   or updating the existing PR for that branch
-- when available, the launcher uses `script` to capture terminal I/O into
-  `logs/`
+- when available, the launcher uses `script` to capture terminal I/O into the
+  active workspace `logs/` directory or the managed `~/.mindex/logs` fallback
 - the managed instructions describe Mindex as a Codex wrapper and enforce the
   repository's branch, fork, and PR protocol
 

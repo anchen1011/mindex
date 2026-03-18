@@ -8,6 +8,7 @@ import unittest
 import subprocess
 import sys
 
+from mindex.codex_home import default_managed_logs_root
 from mindex.launcher import find_project_root, launch_codex
 
 
@@ -182,6 +183,55 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             status_files = list(logs_root.glob("**/status.json"))
+            self.assertEqual(len(status_files), 1)
+            status = json.loads(status_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(status["status"], "success")
+            self.assertEqual(status["returncode"], 0)
+
+    def test_launch_codex_uses_managed_logs_root_outside_a_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            standalone = Path(tmpdir) / "standalone"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            managed_logs_root = Path(tmpdir) / "managed-logs"
+            standalone.mkdir()
+            fake_bin_dir.mkdir()
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
+                "with open(path, 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'codex_home': os.environ.get('CODEX_HOME')}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            output_path = Path(tmpdir) / "codex-output.json"
+
+            env = {
+                "MINDEX_CODEX_BIN": str(fake_codex),
+                "MINDEX_DISABLE_SCRIPT": "1",
+                "MINDEX_FAKE_OUTPUT": str(output_path),
+                "MINDEX_LOGS_ROOT": str(managed_logs_root),
+                "MINDEX_SKIP_AUTO_PUBLISH": "1",
+            }
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(standalone)
+                returncode = launch_codex([], project_root=find_project_root(), env=env)
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cwd"], str(standalone.resolve()))
+            self.assertEqual(payload["args"], [])
+            self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
+
+            self.assertFalse((standalone / "logs").exists())
+            self.assertEqual(default_managed_logs_root(env=env), managed_logs_root.resolve())
+
+            status_files = list(managed_logs_root.glob("**/*-launcher/status.json"))
             self.assertEqual(len(status_files), 1)
             status = json.loads(status_files[0].read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "success")
