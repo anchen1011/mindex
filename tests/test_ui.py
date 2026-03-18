@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+import http.cookiejar
 import io
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
+import urllib.error
+import urllib.request
 
 from mindex.cli import main as cli_main
 from mindex.task_queue import AgentManager, TaskQueueManager
 import mindex.ui as ui_module
-from mindex.ui import APP_JS, MindexUiApp, load_or_create_ui_config
+from mindex.ui import APP_JS, MindexUiApp, create_ui_server, load_or_create_ui_config
 
 
 class UiTests(unittest.TestCase):
@@ -21,6 +26,42 @@ class UiTests(unittest.TestCase):
         root.mkdir(parents=True, exist_ok=True)
         (root / "README.md").write_text("# repo\n", encoding="utf-8")
         (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+
+    def _start_live_server(self, root: Path, *, disable_origin_checks: bool = False, disable_csrf_checks: bool = False):
+        bootstrap = load_or_create_ui_config(
+            project_root=root,
+            password="deck-secret",
+            port=0,
+            disable_origin_checks=disable_origin_checks,
+            disable_csrf_checks=disable_csrf_checks,
+        )
+        server = create_ui_server(bootstrap.config)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def _build_client(self, server: ui_module.ConfiguredUiServer):
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+        def request(path: str, *, method: str = "GET", payload: dict | None = None, headers: dict[str, str] | None = None):
+            data = None if payload is None else json.dumps(payload).encode("utf-8")
+            request_obj = urllib.request.Request(base_url + path, data=data, method=method)
+            request_obj.add_header("Content-Type", "application/json")
+            for key, value in (headers or {}).items():
+                request_obj.add_header(key, value)
+            try:
+                with opener.open(request_obj, timeout=10) as response:
+                    body = response.read().decode("utf-8")
+                    return response.status, json.loads(body) if body else None
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8")
+                payload_body = json.loads(body) if body else None
+                return exc.code, payload_body
+
+        return base_url, request
 
     def test_load_or_create_ui_config_hashes_password_and_migrates_legacy_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -379,6 +420,159 @@ const taskEvent = {{
         result = subprocess.run([node, "-e", script], capture_output=True, text=True)
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "node submit-handler test failed")
+
+    def test_live_ui_api_session_and_queue_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            server, thread = self._start_live_server(root)
+            try:
+                base_url, request = self._build_client(server)
+                login_status, login_payload = request(
+                    "/api/login",
+                    method="POST",
+                    payload={"username": "admin", "password": "deck-secret"},
+                    headers={"Origin": base_url},
+                )
+                self.assertEqual(login_status, 200)
+                csrf_token = login_payload["csrf_token"]
+                auth_headers = {"Origin": base_url, "X-Mindex-CSRF-Token": csrf_token}
+
+                create_status, create_payload = request(
+                    "/api/sessions",
+                    method="POST",
+                    payload={"name": "API session", "workdir": str(root), "command_args": "--version"},
+                    headers=auth_headers,
+                )
+                self.assertEqual(create_status, 201)
+                session = create_payload["session"]
+                session_id = session["agent_id"]
+                queue_id = session["queue"]["queue_id"]
+
+                first_status, first_payload = request(
+                    f"/api/queues/{queue_id}/tasks",
+                    method="POST",
+                    payload={"title": "Check output", "details": "Look for start logs", "status": "pending"},
+                    headers=auth_headers,
+                )
+                self.assertEqual(first_status, 201)
+                first_task_id = first_payload["task"]["task_id"]
+
+                second_status, second_payload = request(
+                    f"/api/queues/{queue_id}/tasks",
+                    method="POST",
+                    payload={"title": "Reorder me", "details": "Promote this first", "status": "blocked"},
+                    headers=auth_headers,
+                )
+                self.assertEqual(second_status, 201)
+                second_task_id = second_payload["task"]["task_id"]
+
+                edit_status, edit_payload = request(
+                    f"/api/queues/{queue_id}/tasks/{second_task_id}",
+                    method="PATCH",
+                    payload={"title": "Reorder me first", "details": "Now in progress", "status": "in_progress"},
+                    headers=auth_headers,
+                )
+                self.assertEqual(edit_status, 200)
+                self.assertEqual(edit_payload["task"]["status"], "in_progress")
+
+                reorder_status, reorder_payload = request(
+                    f"/api/queues/{queue_id}/reorder",
+                    method="POST",
+                    payload={"ordered_task_ids": [second_task_id, first_task_id]},
+                    headers=auth_headers,
+                )
+                self.assertEqual(reorder_status, 200)
+                self.assertEqual(
+                    [task["task_id"] for task in reorder_payload["queue"]["tasks"]],
+                    [second_task_id, first_task_id],
+                )
+
+                start_status, start_payload = request(
+                    f"/api/sessions/{session_id}/start",
+                    method="POST",
+                    payload={},
+                    headers=auth_headers,
+                )
+                self.assertEqual(start_status, 200)
+                self.assertEqual(start_payload["session"]["status"], "running")
+
+                deadline = time.time() + 10
+                while True:
+                    status_status, status_payload = request("/api/status", headers={"Origin": base_url})
+                    self.assertEqual(status_status, 200)
+                    live_session = next(item for item in status_payload["sessions"] if item["agent_id"] == session_id)
+                    if live_session["status"] != "running":
+                        break
+                    self.assertLess(time.time(), deadline, "timed out waiting for the managed session to finish")
+                    time.sleep(0.1)
+
+                self.assertEqual(live_session["status"], "completed")
+                self.assertIn("starting --version", live_session["output"])
+                self.assertEqual(
+                    [task["task_id"] for task in live_session["queue"]["tasks"]],
+                    [second_task_id, first_task_id],
+                )
+
+                delete_task_status, delete_task_payload = request(
+                    f"/api/queues/{queue_id}/tasks/{first_task_id}",
+                    method="DELETE",
+                    headers=auth_headers,
+                )
+                self.assertEqual(delete_task_status, 200)
+                self.assertTrue(delete_task_payload["ok"])
+
+                delete_session_status, delete_session_payload = request(
+                    f"/api/sessions/{session_id}",
+                    method="DELETE",
+                    headers=auth_headers,
+                )
+                self.assertEqual(delete_session_status, 200)
+                self.assertTrue(delete_session_payload["ok"])
+
+                final_status, final_payload = request("/api/status", headers={"Origin": base_url})
+                self.assertEqual(final_status, 200)
+                self.assertEqual(final_payload["sessions"], [])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_live_ui_api_can_skip_origin_and_csrf_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            server, thread = self._start_live_server(
+                root,
+                disable_origin_checks=True,
+                disable_csrf_checks=True,
+            )
+            try:
+                _, request = self._build_client(server)
+                login_status, login_payload = request(
+                    "/api/login",
+                    method="POST",
+                    payload={"username": "admin", "password": "deck-secret"},
+                    headers={"Origin": "https://public.example.net"},
+                )
+                self.assertEqual(login_status, 200)
+
+                csrf_token = login_payload["csrf_token"]
+                create_status, create_payload = request(
+                    "/api/sessions",
+                    method="POST",
+                    payload={"name": "Remote session", "workdir": str(root), "command_args": "--version"},
+                    headers={
+                        "Origin": "https://public.example.net",
+                        "X-Mindex-CSRF-Token": f"wrong-{csrf_token}",
+                    },
+                )
+                self.assertEqual(create_status, 201)
+                self.assertEqual(create_payload["session"]["name"], "Remote session")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
 
 if __name__ == "__main__":

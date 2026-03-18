@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -1581,7 +1581,18 @@ class ConfiguredUiServer(ThreadingHTTPServer):
 
 
 def create_ui_server(config: UiConfig) -> ConfiguredUiServer:
-    return ConfiguredUiServer((config.host, config.port), MindexUiApp(config))
+    server = ConfiguredUiServer((config.host, config.port), MindexUiApp(config))
+    bound_host, bound_port = server.server_address
+    if bound_port != config.port:
+        # Port 0 picks an ephemeral port at bind time, so refresh the in-memory
+        # allowlist to match the real listener before any login request arrives.
+        updated_config = replace(
+            config,
+            port=bound_port,
+            allowed_origins=_normalize_allowed_origins(config.host, bound_port, list(config.allowed_origins)),
+        )
+        server.app.config = updated_config
+    return server
 
 
 def serve_ui(config: UiConfig) -> int:

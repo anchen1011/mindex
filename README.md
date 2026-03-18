@@ -373,7 +373,8 @@ Current automated validation includes:
 - `python3 -m unittest discover -s tests -v`
 - editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 pip install -e .`
 - dry-run configure validation through the installed `mindex` command
-- secure UI config, agent-manager, and CLI routing tests in `tests/test_ui.py`
+- secure UI config, live session/queue API flows, agent-manager, and CLI
+  routing tests in `tests/test_ui.py`
 - publish workflow validation with fake GitHub CLI responses and local Git
   remotes
 
