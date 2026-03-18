@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import sys
 
 from mindex.launcher import find_project_root, launch_codex
 
@@ -125,6 +126,19 @@ class LauncherTests(unittest.TestCase):
             subprocess.run(["git", "init", "-b", "main"], cwd=str(root), check=True, capture_output=True, text=True)
 
             self.assertEqual(find_project_root(nested), root.resolve())
+
+    def test_python_module_cli_supports_direct_execution(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [sys.executable, "-m", "mindex.cli", "--version"],
+            cwd=str(repo_root),
+            env={**os.environ, "PYTHONPATH": str(repo_root)},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.stdout.strip(), "0.1.0")
 
     def test_launch_codex_proxies_from_repo_root_and_logs_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

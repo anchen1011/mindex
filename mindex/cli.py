@@ -28,3 +28,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args[0] == "ui":
         return ui_main(args[1:])
     return launch_codex(args, project_root=project_root)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
