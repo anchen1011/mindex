@@ -209,12 +209,15 @@ Mindex jobs and the coding agents launched through the wrapper.
 Current commands:
 
 - `mindex ui init-config --project-root <root>`
+- `mindex ui reset-config --project-root <root>`
 - `mindex ui serve --project-root <root>`
 
 Implemented behavior:
 
 - creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
   hash instead of storing a plaintext password
+- lets `mindex ui reset-config` rewrite `.mindex/ui_config.json` from scratch
+  with fresh credentials, session secrets, and localhost-first server defaults
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
 - serves a responsive control deck for authentication, recent Mindex activity,

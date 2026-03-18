@@ -249,6 +249,59 @@ def load_or_create_ui_config(
     return UiBootstrap(config=_parse_ui_config(payload, resolved_config_path), migrated_legacy_config=migrated)
 
 
+def reset_ui_config(
+    *,
+    project_root: Path | str,
+    config_path: Path | str | None = None,
+    username: str = "admin",
+    password: str | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    title: str = "Mindex Control Deck",
+    allow_remote: bool = False,
+) -> UiBootstrap:
+    resolved_root = Path(project_root).resolve()
+    default_config_path, default_state_file, default_queue_log_dir = _default_ui_paths(resolved_root)
+    resolved_config_path = Path(config_path).resolve() if config_path else default_config_path
+    configured_password = password or secrets.token_urlsafe(16)
+    payload = _build_config_payload(
+        project_root=resolved_root,
+        config_path=resolved_config_path,
+        username=username,
+        password=configured_password,
+        host=host,
+        port=port,
+        title=title,
+        state_file=default_state_file,
+        queue_log_dir=default_queue_log_dir,
+        allow_remote=allow_remote,
+    )
+    _write_private_json(resolved_config_path, payload)
+    return UiBootstrap(
+        config=_parse_ui_config(payload, resolved_config_path),
+        generated_password=None if password else configured_password,
+    )
+
+
+def _config_as_payload(config: UiConfig) -> dict[str, Any]:
+    payload = asdict(config)
+    for key, value in list(payload.items()):
+        if isinstance(value, Path):
+            payload[key] = str(value)
+    return payload
+
+
+def _add_ui_config_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--project-root", help="Project root to manage; defaults to the detected workspace")
+    parser.add_argument("--config", help="Override the UI config path")
+    parser.add_argument("--username", default="admin", help="Admin username")
+    parser.add_argument("--password", help="Admin password; if omitted, a random password is generated")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind; defaults to localhost")
+    parser.add_argument("--port", type=int, default=8765, help="Port to bind")
+    parser.add_argument("--title", default="Mindex Control Deck", help="Browser title for the UI")
+    parser.add_argument("--allow-remote", action="store_true", help="Allow non-localhost binding")
+
+
 def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
     auth_payload = payload["auth"]
     server_payload = payload["server"]
@@ -1500,14 +1553,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init-config", help="Create or migrate the local Mindex UI config")
-    init_parser.add_argument("--project-root", help="Project root to manage; defaults to the detected workspace")
-    init_parser.add_argument("--config", help="Override the UI config path")
-    init_parser.add_argument("--username", default="admin", help="Admin username")
-    init_parser.add_argument("--password", help="Admin password; if omitted, a random password is generated")
-    init_parser.add_argument("--host", default="127.0.0.1", help="Host to bind; defaults to localhost")
-    init_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
-    init_parser.add_argument("--title", default="Mindex Control Deck", help="Browser title for the UI")
-    init_parser.add_argument("--allow-remote", action="store_true", help="Allow non-localhost binding")
+    _add_ui_config_arguments(init_parser)
+
+    reset_parser = subparsers.add_parser("reset-config", help="Rewrite the local Mindex UI config from scratch")
+    _add_ui_config_arguments(reset_parser)
 
     serve_parser = subparsers.add_parser("serve", help="Serve the local Mindex UI")
     serve_parser.add_argument("--project-root", help="Project root to manage; defaults to the detected workspace")
@@ -1533,14 +1582,28 @@ def main(argv: list[str] | None = None) -> int:
             title=args.title,
             allow_remote=args.allow_remote,
         )
-        payload = asdict(bootstrap.config)
-        for key, value in list(payload.items()):
-            if isinstance(value, Path):
-                payload[key] = str(value)
+        payload = _config_as_payload(bootstrap.config)
         if bootstrap.generated_password:
             print(f"Generated UI password: {bootstrap.generated_password}", file=sys.stderr)
         elif bootstrap.migrated_legacy_config:
             print("Migrated the UI config to the secure password-hash format.", file=sys.stderr)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "reset-config":
+        bootstrap = reset_ui_config(
+            project_root=project_root,
+            config_path=args.config,
+            username=args.username,
+            password=args.password,
+            host=args.host,
+            port=args.port,
+            title=args.title,
+            allow_remote=args.allow_remote,
+        )
+        payload = _config_as_payload(bootstrap.config)
+        if bootstrap.generated_password:
+            print(f"Generated UI password: {bootstrap.generated_password}", file=sys.stderr)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
@@ -1572,5 +1635,6 @@ __all__ = [
     "create_ui_server",
     "load_or_create_ui_config",
     "main",
+    "reset_ui_config",
     "serve_ui",
 ]
