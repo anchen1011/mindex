@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from typing import Iterable
 
-from mindex.github_workflow import WorkflowError, ensure_feature_branch
+from mindex.github_workflow import WorkflowError, ensure_feature_branch, maybe_publish_session
 from mindex.logging_utils import append_action, create_log_run, write_status
 
 
@@ -85,10 +85,29 @@ def launch_codex(
         )
         capture_path = None
 
+    publish_result = None
+    if run_env.get("MINDEX_AUTO_PUBLISH", "1") != "0":
+        try:
+            publish_result = maybe_publish_session(
+                project_root=launch_root,
+                argv=args,
+                branch_name=active_branch if "active_branch" in locals() else None,
+                returncode=completed.returncode,
+                env=run_env,
+                log_run=log_run,
+            )
+            if publish_result is not None:
+                append_action(log_run, f"Automatic publication verified: {publish_result.pr_url}")
+        except WorkflowError as exc:
+            append_action(log_run, f"Automatic publication skipped: {exc}")
+
     write_status(
         log_run,
         "success" if completed.returncode == 0 else "failure",
         returncode=completed.returncode,
         terminal_capture_path=capture_path,
+        published_pr_url=publish_result.pr_url if publish_result is not None else None,
+        published_pr_number=publish_result.pr_number if publish_result is not None else None,
+        published_branch=publish_result.branch_name if publish_result is not None else None,
     )
     return completed.returncode

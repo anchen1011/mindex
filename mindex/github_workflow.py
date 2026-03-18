@@ -139,6 +139,14 @@ def _git_remote_exists(project_root: Path, remote_name: str, *, env: dict[str, s
     return completed.returncode == 0
 
 
+def _git_upstream_ref(project_root: Path, *, env: dict[str, str] | None = None) -> str | None:
+    completed = _git(project_root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", env=env, check=False)
+    if completed.returncode != 0:
+        return None
+    upstream = completed.stdout.strip()
+    return upstream or None
+
+
 def _compare_ref(project_root: Path, base_branch: str, *, env: dict[str, str] | None = None) -> str:
     remote_ref = f"origin/{base_branch}"
     if _git_ref_exists(project_root, remote_ref, env=env):
@@ -476,6 +484,86 @@ def _update_pull_request_metadata(
         f"body={body}",
         env=env,
         log_run=log_run,
+    )
+
+
+def default_auto_publish_message(branch_name: str) -> str:
+    branch_title = _humanize_branch_name(branch_name)
+    if branch_title:
+        return f"Update {branch_title}"
+    return "Update Mindex session work"
+
+
+def default_auto_publish_notes(argv: Iterable[str], *, returncode: int | None = None) -> str:
+    command_text = "mindex " + " ".join(shlex.quote(part) for part in argv)
+    details = [
+        "## Automatic Session Publication",
+        f"- Session command: `{command_text}`",
+    ]
+    if returncode is not None:
+        details.append(f"- Command return code: `{returncode}`")
+    details.append("- GitHub publication is enabled by default so each interaction is reflected remotely.")
+    return "\n".join(details)
+
+
+def _has_publishable_work(project_root: Path, *, branch_name: str, env: dict[str, str] | None = None) -> bool:
+    if _working_tree_has_changes(project_root, env=env):
+        return True
+
+    upstream_ref = _git_upstream_ref(project_root, env=env)
+    if upstream_ref and _git_ref_exists(project_root, upstream_ref, env=env):
+        ahead = int(_git(project_root, "rev-list", "--count", f"{upstream_ref}..HEAD", env=env).stdout.strip())
+        if ahead > 0:
+            return True
+
+    for fallback in ("origin/main", "main", "origin/master", "master"):
+        if _git_ref_exists(project_root, fallback, env=env):
+            ahead = int(_git(project_root, "rev-list", "--count", f"{fallback}..HEAD", env=env).stdout.strip())
+            if ahead > 0:
+                return True
+
+    return False
+
+
+def maybe_publish_session(
+    *,
+    project_root: Path | str,
+    argv: Iterable[str],
+    branch_name: str | None = None,
+    returncode: int | None = None,
+    env: dict[str, str] | None = None,
+    log_run=None,
+) -> PublishResult | None:
+    resolved_root = Path(project_root).resolve()
+    if not _is_git_repository(resolved_root, env=env):
+        if log_run is not None:
+            append_action(log_run, "Automatic publication skipped because the project root is not a Git repository.")
+        return None
+
+    active_branch = branch_name or get_current_branch(resolved_root, env=env, log_run=log_run)
+    if not _has_publishable_work(resolved_root, branch_name=active_branch, env=env):
+        if log_run is not None:
+            append_action(log_run, f"No publishable session changes detected on branch {active_branch}.")
+        return None
+
+    context = get_repository_context(resolved_root, env=env, log_run=log_run)
+    existing_pr = _find_existing_pr(
+        resolved_root,
+        branch_name=active_branch,
+        viewer_login=context.viewer_login,
+        env=env,
+        log_run=log_run,
+    )
+    explicit_title = existing_pr.title if existing_pr is not None else None
+    explicit_body = default_auto_publish_notes(argv, returncode=returncode)
+    commit_message = default_auto_publish_message(active_branch)
+    return publish_pull_request(
+        project_root=resolved_root,
+        commit_message=commit_message,
+        title=explicit_title,
+        body=explicit_body,
+        branch_name=active_branch,
+        env=env,
     )
 
 

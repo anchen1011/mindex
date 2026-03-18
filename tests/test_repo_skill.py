@@ -49,7 +49,7 @@ class RepoSkillTests(unittest.TestCase):
 
         self.assertIn("Mindex is a Codex wrapper", configure_text)
         self.assertIn(
-            "enforce feature branches, PR-first work, full-branch PR descriptions, PR URL verification, and no direct pushes",
+            "enforce feature branches, automatic PR publication, full-branch PR descriptions, PR URL verification, and no direct pushes",
             configure_text,
         )
         self.assertIn("describe Mindex as a Codex wrapper", configure_text)

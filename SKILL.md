@@ -36,6 +36,7 @@ This skill is for development work inside this repository only.
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
 - require Mindex-managed PR titles and bodies to describe the complete branch scope, not just the newest commit
+- treat automatic GitHub publication as the default completion path for each meaningful interaction, using a new branch/PR for new feature work and the existing PR only for true follow-up work on that branch
 - never allow Mindex-managed behavior to push directly to `main`, `master`, `production`, or another person's branch
 
 ## Expected validation

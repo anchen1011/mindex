@@ -51,6 +51,9 @@
   its URL is captured.
 - Pull Request titles and descriptions must represent the full scope of the
   branch, including all commits included in that Pull Request.
+- Meaningful MindX interactions should publish to GitHub automatically by
+  default, creating a new PR for a new feature branch and updating the
+  existing PR when continuing the same feature branch.
 - Never push directly to `main`, `master`, `production`, or another shared
   release branch.
 - Never touch another person's existing branch unless the user explicitly
@@ -120,6 +123,8 @@
   publication workflow as complete.
 - Ensure the generated Pull Request metadata is refreshed from the complete
   branch scope rather than only the newest commit.
+- Make automatic GitHub publication the default launcher behavior so a user
+  does not need to request PR creation manually on each interaction.
 
 ### Notes
 

@@ -72,6 +72,7 @@ operating policy for future repository work, not as a one-off task note.
 - Publish meaningful AI-generated changes to GitHub instead of leaving them only on the local machine.
 - Use one branch per feature and one PR per feature.
 - Do not bundle multiple independent features into a single branch or PR.
+- Publish meaningful completed interactions to GitHub automatically by default.
 - Never push directly to `main`, `master`, `production`, or similarly protected release branches.
 - When work starts from a protected branch, create a fresh feature branch before any repository changes continue.
 - Never touch another person's existing branch unless the user explicitly instructs you to do so.
@@ -82,10 +83,12 @@ operating policy for future repository work, not as a one-off task note.
 ## GitHub workflow policy
 
 - If the repository belongs to the user, create a fresh feature branch for each specific feature, push that branch to GitHub, open or update the matching PR, and confirm the PR can be located on GitHub.
+- Make PR creation and updates automatic for meaningful completed interactions so users do not need to request GitHub publication manually.
 - If the repository belongs to someone else or to an organization, fork it to the user's own GitHub account whenever possible, push the feature branch to that fork, and open the PR from the user's account.
 - If forking is not possible, create a new feature branch in the organization repository and keep clear ownership boundaries.
 - Never work on `main`, `master`, `production`, or any other shared release branch as the source branch for a feature.
 - Never reuse an unrelated in-flight feature branch for a new task.
+- Only continue on an existing feature branch when the new interaction is clearly follow-up work for that same feature; otherwise create a new feature branch and PR.
 - Use `mindex publish-pr` to automate branch creation when needed, commit the work, push it, create the PR, and verify the PR URL.
 
 ## Repository reminders

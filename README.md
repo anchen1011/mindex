@@ -74,6 +74,8 @@ Current implementation:
 - `mindex` launcher records command metadata and terminal capture paths
 - `mindex publish-pr` records branch, push, and PR verification steps under
   `logs/`
+- `mindex` launcher can auto-publish completed coding sessions so each
+  interaction is reflected on GitHub by default
 - repository work also records validation results under the local `logs/`
   directory
 - `logs/` is intended as a local artifact and should not be committed to Git
@@ -104,6 +106,9 @@ Current implementation:
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch
+- after a `mindex`-launched coding session finishes, Mindex auto-publishes the
+  resulting branch changes to GitHub by default, creating a new PR when needed
+  or updating the existing PR for that branch
 - when available, the launcher uses `script` to capture terminal I/O into
   `logs/`
 - the managed instructions describe Mindex as a Codex wrapper and enforce the
@@ -135,6 +140,8 @@ Implemented behavior:
   that the PR can be located on GitHub
 - regenerates the PR description from all commits and changed files on the
   branch so the published PR matches the full feature scope
+- is the default publication path for completed Mindex coding interactions, so
+  GitHub reflection does not depend on a separate manual request
 - records publication metadata, command output, and PR verification details
   under `logs/`
 
@@ -187,6 +194,10 @@ The repo skill is intended to:
   captured
 - the PR title and body must describe the cumulative scope of the branch, not
   only the most recent commit
+- GitHub publication should happen automatically for each meaningful
+  interaction; starting from a protected branch should create a new feature
+  branch and PR, while follow-up work on the same feature branch should update
+  that branch's existing PR
 - never push directly to `main`, `master`, `production`, or another protected
   release branch
 - never work on or overwrite another person's branch unless the user explicitly
