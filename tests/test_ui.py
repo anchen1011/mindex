@@ -421,6 +421,103 @@ const taskEvent = {{
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "node submit-handler test failed")
 
+    def test_submit_handlers_tolerate_missing_form_target(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+
+        script = f"""
+const vm = require('vm');
+
+let source = {APP_JS!r};
+source = source.replace(/\\nloadDashboard\\(\\);\\s*$/, '\\n');
+
+const errorNode = {{
+  textContent: '',
+  classList: {{
+    add() {{}},
+    remove() {{}},
+  }},
+}};
+
+global.document = {{
+  getElementById(id) {{
+    if (id === 'session-form-error') {{
+      return errorNode;
+    }}
+    return {{
+      addEventListener() {{}},
+      classList: {{ add() {{}}, remove() {{}} }},
+      innerHTML: '',
+      textContent: '',
+    }};
+  }},
+  querySelectorAll() {{
+    return [];
+  }},
+  createElement() {{
+    return {{
+      textContent: '',
+      innerHTML: '',
+    }};
+  }},
+}};
+
+global.window = {{
+  prompt() {{ return null; }},
+  confirm() {{ return false; }},
+}};
+
+const alerts = [];
+global.alert = message => alerts.push(message);
+global.FormData = class {{
+  constructor(form) {{
+    this.form = form;
+  }}
+  get(key) {{
+    return this.form.values[key];
+  }}
+}};
+
+vm.runInThisContext(source, {{ filename: 'app.js' }});
+
+let loginMessage = '';
+renderLogin = message => {{
+  loginMessage = message;
+}};
+
+let apiCalls = 0;
+api = async () => {{
+  apiCalls += 1;
+  return {{}};
+}};
+
+(async () => {{
+  await submitLogin({{ currentTarget: null, target: null, preventDefault() {{}} }});
+  await submitSession({{ currentTarget: null, target: null, preventDefault() {{}} }});
+  await submitTask({{ currentTarget: null, target: null, preventDefault() {{}} }});
+
+  if (loginMessage !== 'Unable to read the login form. Refresh and try again.') {{
+    throw new Error(`login message: ${{loginMessage}}`);
+  }}
+  if (errorNode.textContent !== 'Unable to read the session form. Refresh and try again.') {{
+    throw new Error(`session error: ${{errorNode.textContent}}`);
+  }}
+  if (alerts.length !== 1 || alerts[0] !== 'Unable to read the queue form. Refresh and try again.') {{
+    throw new Error(`alerts: ${{JSON.stringify(alerts)}}`);
+  }}
+  if (apiCalls !== 0) {{
+    throw new Error(`api calls: ${{apiCalls}}`);
+  }}
+}})().catch(error => {{
+  console.error(error.stack || String(error));
+  process.exit(1);
+}});
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout or "node missing-form test failed")
+
     def test_live_ui_api_session_and_queue_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"

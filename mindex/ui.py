@@ -848,6 +848,28 @@ function statusClass(status) {
   return `status-pill status-${String(status || 'queued').replace(/_/g, '-').toLowerCase()}`;
 }
 
+function resolveFormTarget(event) {
+  const candidate = event && (event.currentTarget || event.target);
+  if (!candidate) {
+    return null;
+  }
+  if (typeof candidate.closest === 'function') {
+    const form = candidate.closest('form');
+    if (form) {
+      return form;
+    }
+  }
+  return candidate;
+}
+
+function setNotice(node, message = '') {
+  if (!node) {
+    return;
+  }
+  node.textContent = message;
+  node.classList[message ? 'remove' : 'add']('hidden');
+}
+
 function renderLogin(message = '') {
   const app = document.getElementById('app');
   app.innerHTML = `
@@ -867,7 +889,12 @@ function renderLogin(message = '') {
 
 async function submitLogin(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const formElement = resolveFormTarget(event);
+  if (!formElement) {
+    renderLogin('Unable to read the login form. Refresh and try again.');
+    return;
+  }
+  const form = new FormData(formElement);
   try {
     const payload = await api('/api/login', {
       method: 'POST',
@@ -1003,11 +1030,15 @@ function renderDashboard(payload) {
 
 async function submitSession(event) {
   event.preventDefault();
-  const formElement = event.currentTarget;
+  const errorNode = document.getElementById('session-form-error');
+  const formElement = resolveFormTarget(event);
+  if (!formElement) {
+    setNotice(errorNode, 'Unable to read the session form. Refresh and try again.');
+    return;
+  }
   const form = new FormData(formElement);
   const workdirValue = String(form.get('workdir') || '');
-  const errorNode = document.getElementById('session-form-error');
-  errorNode.classList.add('hidden');
+  setNotice(errorNode);
   try {
     await api('/api/sessions', {
       method: 'POST',
@@ -1016,12 +1047,15 @@ async function submitSession(event) {
         workdir: form.get('workdir'),
       }),
     });
-    formElement.reset();
-    formElement.elements.workdir.value = workdirValue;
+    if (typeof formElement.reset === 'function') {
+      formElement.reset();
+    }
+    if (formElement.elements && formElement.elements.workdir) {
+      formElement.elements.workdir.value = workdirValue;
+    }
     await loadDashboard();
   } catch (error) {
-    errorNode.textContent = error.message;
-    errorNode.classList.remove('hidden');
+    setNotice(errorNode, error.message);
   }
 }
 
@@ -1047,8 +1081,16 @@ async function renameQueue(queueId, currentName, currentDescription) {
 
 async function submitTask(event) {
   event.preventDefault();
-  const formElement = event.currentTarget;
-  const queueId = formElement.dataset.taskForm;
+  const formElement = resolveFormTarget(event);
+  if (!formElement) {
+    alert('Unable to read the queue form. Refresh and try again.');
+    return;
+  }
+  const queueId = formElement.dataset ? formElement.dataset.taskForm : '';
+  if (!queueId) {
+    alert('Unable to find the queue for this form. Refresh and try again.');
+    return;
+  }
   const form = new FormData(formElement);
   try {
     await api(`/api/queues/${queueId}/tasks`, {
@@ -1059,7 +1101,9 @@ async function submitTask(event) {
         status: form.get('status'),
       }),
     });
-    formElement.reset();
+    if (typeof formElement.reset === 'function') {
+      formElement.reset();
+    }
     await loadDashboard();
   } catch (error) {
     alert(error.message);
