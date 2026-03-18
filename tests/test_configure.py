@@ -35,6 +35,7 @@ class ConfigureTests(unittest.TestCase):
             plan = json.loads((result.log_dir / "configure_plan.json").read_text(encoding="utf-8"))
             self.assertTrue(plan["dry_run"])
             self.assertIn("configure", plan["packaged_skills"])
+            self.assertIn("multi-agent", plan["packaged_skills"])
             self.assertIn("repo", plan["packaged_skills"])
 
     def test_configure_defaults_to_global_managed_codex_home(self) -> None:
@@ -81,12 +82,15 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("Load Mindex-managed skills from `~/.mindex/codex-home/skills`", instructions_text)
             self.assertIn("If a user asks Codex to configure Mindex", instructions_text)
             self.assertIn("Use one branch per feature and one PR per feature.", instructions_text)
+            self.assertIn("assign each agent", instructions_text)
+            self.assertIn("Treat that branch and PR isolation as the default", instructions_text)
             self.assertIn("Never push directly to `main`, `master`, `production`", instructions_text)
             self.assertIn("multiple agents or parallel efforts pursue different goals", instructions_text)
             self.assertIn("fork it to the user's own GitHub account whenever possible", instructions_text)
             self.assertIn("does not explicitly mention repo workflow, Git, GitHub, branches, or PRs", instructions_text)
             self.assertEqual(result.instructions_path, codex_home / "mindex_instructions.md")
             self.assertTrue((codex_home / "skills" / "configure" / "SKILL.md").exists())
+            self.assertTrue((codex_home / "skills" / "multi-agent" / "SKILL.md").exists())
             self.assertTrue((codex_home / "skills" / "repo" / "SKILL.md").exists())
             self.assertTrue((codex_home / "skills" / "configure").is_symlink())
             self.assertTrue((codex_home / "skills" / "repo").is_symlink())

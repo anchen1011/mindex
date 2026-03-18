@@ -52,6 +52,14 @@ class BranchScope:
 
 
 @dataclass(frozen=True)
+class AgentCoordinationContext:
+    enabled: bool
+    agent_id: str
+    agent_name: str
+    goal: str
+
+
+@dataclass(frozen=True)
 class PublishResult:
     branch_name: str
     base_branch: str
@@ -157,6 +165,95 @@ def _compare_ref(project_root: Path, base_branch: str, *, env: dict[str, str] | 
 def _build_branch_name(summary: str) -> str:
     cleaned = slugify(summary)[:48] or "change"
     return f"mindex/{cleaned}"
+
+
+def _multi_agent_context(env: dict[str, str] | None = None) -> AgentCoordinationContext:
+    merged_env = env or {}
+    enabled = merged_env.get("MINDEX_MULTI_AGENT") == "1" or bool(merged_env.get("MINDEX_AGENT_ID"))
+    return AgentCoordinationContext(
+        enabled=enabled,
+        agent_id=merged_env.get("MINDEX_AGENT_ID", "").strip(),
+        agent_name=merged_env.get("MINDEX_AGENT_NAME", "").strip(),
+        goal=merged_env.get("MINDEX_AGENT_GOAL", "").strip(),
+    )
+
+
+def _agent_registry_path(project_root: Path) -> Path:
+    return project_root / ".mindex" / "agent-branches.json"
+
+
+def _load_agent_registry(project_root: Path) -> dict[str, dict[str, str]]:
+    registry_path = _agent_registry_path(project_root)
+    if not registry_path.exists():
+        return {}
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        branches = payload.get("branches", {})
+        if isinstance(branches, dict):
+            return {
+                str(branch_name): {str(key): str(value) for key, value in metadata.items()}
+                for branch_name, metadata in branches.items()
+                if isinstance(metadata, dict)
+            }
+    return {}
+
+
+def _save_agent_registry(project_root: Path, branches: dict[str, dict[str, str]]) -> None:
+    registry_path = _agent_registry_path(project_root)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"branches": branches, "updated_at": utc_timestamp()}
+    registry_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _branch_owned_by_agent(branch_metadata: dict[str, str] | None, agent_context: AgentCoordinationContext) -> bool:
+    if branch_metadata is None:
+        return False
+    if agent_context.agent_id:
+        return branch_metadata.get("agent_id", "") == agent_context.agent_id
+    if agent_context.agent_name:
+        return branch_metadata.get("agent_name", "") == agent_context.agent_name
+    if agent_context.goal:
+        return branch_metadata.get("goal", "") == agent_context.goal
+    return False
+
+
+def _multi_agent_branch_name(summary: str, agent_context: AgentCoordinationContext) -> str:
+    base_name = _build_branch_name(agent_context.goal or summary)
+    owner_hint = agent_context.agent_name or agent_context.agent_id
+    if not owner_hint:
+        return base_name
+    owner_slug = slugify(owner_hint)[:16]
+    if not owner_slug:
+        return base_name
+    branch_root = base_name.split("/", 1)[1]
+    return f"mindex/{branch_root}-{owner_slug}"
+
+
+def _record_agent_branch_assignment(
+    project_root: Path,
+    *,
+    branch_name: str,
+    summary: str,
+    agent_context: AgentCoordinationContext,
+    log_run=None,
+) -> None:
+    if not agent_context.enabled:
+        return
+    branches = _load_agent_registry(project_root)
+    branches[branch_name] = {
+        "agent_id": agent_context.agent_id,
+        "agent_name": agent_context.agent_name,
+        "goal": agent_context.goal or summary,
+        "updated_at": utc_timestamp(),
+    }
+    _save_agent_registry(project_root, branches)
+    if log_run is not None:
+        append_action(
+            log_run,
+            "Recorded multi-agent branch assignment: "
+            f"branch={branch_name}, agent_id={agent_context.agent_id or 'n/a'}, "
+            f"agent_name={agent_context.agent_name or 'n/a'}, goal={agent_context.goal or summary}",
+        )
 
 
 def _unique_branch_name(project_root: Path, base_name: str, *, env: dict[str, str] | None = None) -> str:
@@ -329,20 +426,59 @@ def ensure_feature_branch(
             append_action(log_run, "Git branch automation skipped because the project root is not a Git repository.")
         return None
 
+    agent_context = _multi_agent_context(env)
     current_branch = get_current_branch(resolved_root, env=env, log_run=log_run)
-    if branch_name is None and current_branch not in PROTECTED_BRANCHES and current_branch != "HEAD":
+    if (
+        not agent_context.enabled
+        and branch_name is None
+        and current_branch not in PROTECTED_BRANCHES
+        and current_branch != "HEAD"
+    ):
         if log_run is not None:
             append_action(log_run, f"Reusing existing feature branch: {current_branch}")
         return current_branch
 
-    target_branch = branch_name or _build_branch_name(summary)
+    registry = _load_agent_registry(resolved_root) if agent_context.enabled else {}
+    if (
+        agent_context.enabled
+        and branch_name is None
+        and current_branch not in PROTECTED_BRANCHES
+        and current_branch != "HEAD"
+        and _branch_owned_by_agent(registry.get(current_branch), agent_context)
+    ):
+        if log_run is not None:
+            append_action(log_run, f"Reusing current agent-owned branch: {current_branch}")
+        _record_agent_branch_assignment(
+            resolved_root,
+            branch_name=current_branch,
+            summary=summary,
+            agent_context=agent_context,
+            log_run=log_run,
+        )
+        return current_branch
+
+    target_branch = branch_name or (
+        _multi_agent_branch_name(summary, agent_context) if agent_context.enabled else _build_branch_name(summary)
+    )
     if target_branch in PROTECTED_BRANCHES:
         raise WorkflowError(f"Refusing to use protected branch {target_branch!r} for feature work.")
 
     if target_branch == current_branch:
+        _record_agent_branch_assignment(
+            resolved_root,
+            branch_name=target_branch,
+            summary=summary,
+            agent_context=agent_context,
+            log_run=log_run,
+        )
         return target_branch
 
     if _git_branch_exists(resolved_root, target_branch, env=env):
+        branch_metadata = registry.get(target_branch) if agent_context.enabled else None
+        if agent_context.enabled and branch_name is not None and not _branch_owned_by_agent(branch_metadata, agent_context):
+            raise WorkflowError(
+                f"Branch {target_branch!r} is already assigned to another in-flight agent; choose a different branch."
+            )
         if branch_name is None:
             target_branch = _unique_branch_name(resolved_root, target_branch, env=env)
             _git(resolved_root, "switch", "-c", target_branch, env=env, log_run=log_run)
@@ -350,6 +486,13 @@ def ensure_feature_branch(
             _git(resolved_root, "switch", target_branch, env=env, log_run=log_run)
     else:
         _git(resolved_root, "switch", "-c", target_branch, env=env, log_run=log_run)
+    _record_agent_branch_assignment(
+        resolved_root,
+        branch_name=target_branch,
+        summary=summary,
+        agent_context=agent_context,
+        log_run=log_run,
+    )
     return target_branch
 
 
@@ -725,6 +868,9 @@ def publish_pull_request(
             pr_title=pr_title,
             pr_url=pr_info.url,
             pr_state=pr_info.state,
+            published_pr_url=pr_info.url,
+            published_pr_number=pr_info.number,
+            published_branch=branch,
         )
     except Exception as exc:
         write_status(log_run, "failure", error=str(exc))

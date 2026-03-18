@@ -17,6 +17,7 @@ The repository currently includes:
 - structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
+- a secure local web UI for managing Mindex jobs and coding agents
 
 The repository now has an initial implementation for the core runtime features
 below, with additional hardening and integration work still in progress.
@@ -175,7 +176,69 @@ Implemented behavior:
 - records publication metadata, command output, and PR verification details
   under `logs/`
 
-### 6. Repository-local development skill
+### 6. Secure web UI
+
+Mindex now includes a browser-accessible control surface for managing queued
+Mindex jobs and the coding agents launched through the wrapper.
+
+Current commands:
+
+- `mindex ui init-config --project-root <root>`
+- `mindex ui serve --project-root <root>`
+
+Implemented behavior:
+
+- creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
+  hash instead of storing a plaintext password
+- defaults the server to `127.0.0.1` and requires an explicit
+  `allow_remote=true` config choice before binding to non-localhost interfaces
+- serves a responsive control deck for authentication, recent Mindex activity,
+  agent creation, agent lifecycle controls, and session task queues
+- stores opaque session cookies in-memory, uses CSRF tokens for state-changing
+  requests, and rate-limits repeated login failures
+- persists queue state under `.mindex/task_queues.json`, including queue names,
+  queue descriptions, and ordered task lists for the current session backlog
+- lets users add, edit, delete, and drag-to-reorder tasks inside each queue so
+  upcoming work can be reprioritized directly in the browser
+- keeps agent workdirs constrained to the configured project root and launches
+  agents as `python -m mindex ...` without going through a shell
+- persists agent state under `.mindex/task_queues.json` and writes per-agent
+  output under `.mindex/queue_logs/`
+- migrates legacy `.mindex/ui_config.json` files that still contain a plaintext
+  password and rewrites them into the secure hash-based format
+
+Design direction:
+
+- draws on the browser-accessible Codex control-room model shown by CodexUI and
+  the OpenAI Codex app, especially around session visibility and agent
+  management
+- keeps the remote-access convenience of community Codex web frontends, but
+  hardens Mindex with localhost-first binding, hashed credentials, CSRF
+  protection, and origin checks because reference projects explicitly leave
+  parts of that threat model to the operator
+
+### 7. Multi-agent branch and PR coordination skill
+
+Mindex now includes a packaged `multi-agent` skill for coordinating several
+coding agents inside the same repository at the same time.
+
+Implemented behavior:
+
+- treats one agent as the owner of one goal, one feature branch, and one PR
+- makes branch and PR isolation the default even when the user does not
+  explicitly mention repository workflow details
+- reinforces that new feature work should create a fresh branch, make the
+  corresponding commit, and publish through the matching PR by default
+- prevents different features from being mixed into the same in-flight branch
+  or pull request
+- requires each agent to inspect existing in-flight work before choosing a
+  branch
+- keeps integration between agents on reviewed PRs instead of ad hoc branch
+  sharing
+- records the agent, goal, branch, and PR status in local logs when that
+  coordination data is available
+
+### 8. Repository-local development skill
 
 This repository also includes a top-level `SKILL.md` that guides agent work on
 the Mindex project itself. It complements the packaged `repo` skill, but it is
@@ -185,6 +248,7 @@ documentation.
 Current packaged skills:
 
 - `mindex/assets/skills/configure/`
+- `mindex/assets/skills/multi-agent/`
 - `mindex/assets/skills/repo/`
 
 The repo skill is intended to:
@@ -193,6 +257,7 @@ The repo skill is intended to:
 - help Codex understand the project workflow and structure
 - reinforce testing, logging, GitHub publication, and PR requirements when
   working in this repo
+- point concurrent work toward the packaged `multi-agent` coordination rules
 - require meaningful repository work to be published with `mindex publish-pr`
   or an equivalent verified PR workflow before it is considered complete
 
@@ -213,6 +278,10 @@ The repo skill is intended to:
 - use one branch per feature
 - submit one PR per feature
 - avoid combining multiple features into one branch or one PR
+- when multiple coding agents are active in the same repository, assign one
+  branch and one PR per agent-owned goal by default
+- do not wait for the user to mention repo or PR workflow before isolating
+  concurrent agent work
 - if work begins on `main`, `master`, `production`, or another protected
   branch, create a new feature branch before continuing
 - for personal repositories, create a fresh feature branch for each specific
@@ -260,7 +329,8 @@ The repo skill is intended to:
 - `HISTORY.md` - tracked requirements and status
 - `logs/` - structured local execution, validation, and policy logs
 - `mindex/` - Python package for configure, logging, install hooks, skills,
-  and launcher code that wraps Codex with project policy
+  launcher code, task queues, and the secure web UI that wraps Codex with
+  project policy
 - `tests/` - automated validation for the package behavior
 - `setup.py` - packaging plus editable-install hook entry
 
@@ -271,6 +341,7 @@ Current automated validation includes:
 - `python3 -m unittest discover -s tests -v`
 - editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 pip install -e .`
 - dry-run configure validation through the installed `mindex` command
+- secure UI config, agent-manager, and CLI routing tests in `tests/test_ui.py`
 - publish workflow validation with fake GitHub CLI responses and local Git
   remotes
 

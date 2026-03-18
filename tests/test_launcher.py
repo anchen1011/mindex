@@ -303,6 +303,61 @@ class LauncherTests(unittest.TestCase):
             self.assertIn("Automatic Session Publication", gh_state["pr"]["payload"]["body"])
             self.assertIn("`session-note.txt`", gh_state["pr"]["payload"]["body"])
 
+    def test_launch_codex_in_multi_agent_mode_avoids_reusing_another_feature_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            root.mkdir()
+            fake_bin_dir.mkdir()
+            (root / "README.md").write_text("# repo\n", encoding="utf-8")
+            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+            self._init_git_repo(root)
+            subprocess.run(["git", "checkout", "-b", "mindex/existing-feature"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, subprocess\n"
+                "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
+                "branch = subprocess.run(\n"
+                "    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],\n"
+                "    check=True,\n"
+                "    capture_output=True,\n"
+                "    text=True,\n"
+                ").stdout.strip()\n"
+                "with open(path, 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'branch': branch}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            output_path = Path(tmpdir) / "codex-output.json"
+
+            returncode = launch_codex(
+                ["status"],
+                project_root=root,
+                logs_root=logs_root,
+                env={
+                    "MINDEX_CODEX_BIN": str(fake_codex),
+                    "MINDEX_DISABLE_SCRIPT": "1",
+                    "MINDEX_AUTO_PUBLISH": "0",
+                    "MINDEX_FAKE_OUTPUT": str(output_path),
+                    "MINDEX_MULTI_AGENT": "1",
+                    "MINDEX_AGENT_ID": "agent-77",
+                    "MINDEX_AGENT_NAME": "Docs Agent",
+                    "MINDEX_AGENT_GOAL": "Write API guide",
+                },
+            )
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(payload["branch"], "mindex/existing-feature")
+            self.assertTrue(payload["branch"].startswith("mindex/write-api-guide"))
+            self.assertIn("docs-agent", payload["branch"])
+
+            registry = json.loads((root / ".mindex" / "agent-branches.json").read_text(encoding="utf-8"))
+            self.assertEqual(registry["branches"][payload["branch"]]["agent_id"], "agent-77")
+
     def test_launch_codex_applies_mindex_behavior_in_generic_git_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "generic-repo"

@@ -34,6 +34,7 @@ This skill is for development work inside this repository only.
 - prefer focused changes that strengthen the `mindex` package instead of adding repo-only hacks
 - keep `codex` unchanged; Mindex-managed behavior belongs in `mindex`
 - treat branch-per-feature and PR-first development as the default workflow
+- create a fresh feature branch for new feature work and make the corresponding commit before publication
 - preserve the rule that meaningful AI-generated work is pushed to GitHub through feature branches and PRs
 - use `mindex publish-pr` or an equivalent verified workflow before considering meaningful repository work complete
 - require Mindex-managed publication to verify the PR URL on GitHub before the task is considered published
