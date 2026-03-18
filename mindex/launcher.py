@@ -7,12 +7,24 @@ import shutil
 import subprocess
 from typing import Iterable
 
+from mindex.codex_home import default_managed_codex_home
 from mindex.github_workflow import WorkflowError, ensure_feature_branch, maybe_publish_session
 from mindex.logging_utils import append_action, create_log_run, write_status
 
 
 def find_project_root(start: Path | str | None = None) -> Path:
     current = Path(start or Path.cwd()).resolve()
+    git_root = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(current),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if git_root.returncode == 0:
+        resolved = git_root.stdout.strip()
+        if resolved:
+            return Path(resolved).resolve()
     for candidate in (current, *current.parents):
         if (candidate / "README.md").exists() and (candidate / "HISTORY.md").exists():
             return candidate
@@ -38,6 +50,10 @@ def launch_codex(
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
+    managed_codex_home = default_managed_codex_home(env=run_env)
+    run_env["MINDEX_CODEX_HOME"] = str(managed_codex_home)
+    run_env["CODEX_HOME"] = str(managed_codex_home)
+    run_env["MINDEX_PROJECT_ROOT"] = str(launch_root)
     command = [resolve_codex_command(run_env), *args]
 
     log_run = create_log_run(
@@ -48,9 +64,11 @@ def launch_codex(
             "project_root": str(launch_root),
             "command": command,
             "cwd": str(Path.cwd().resolve()),
+            "codex_home": str(managed_codex_home),
         },
     )
     append_action(log_run, f"Proxy command: {shlex.join(command)}")
+    append_action(log_run, f"Managed Codex home: {managed_codex_home}")
 
     try:
         requested_branch = run_env.get("MINDEX_FEATURE_BRANCH")

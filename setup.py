@@ -72,7 +72,7 @@ if AutoConfigureEditableWheel is not None:
 setup(
     name="mindex",
     version="0.1.0",
-    description="Project-specific Codex wrapper and configuration layer for the mindex repository.",
+    description="Managed Codex wrapper and configuration layer for running Mindex across projects.",
     long_description=(REPO_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     license="MIT",
