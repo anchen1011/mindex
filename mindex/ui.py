@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import getpass
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -247,6 +248,34 @@ def load_or_create_ui_config(
     if migrated:
         _write_private_json(resolved_config_path, payload)
     return UiBootstrap(config=_parse_ui_config(payload, resolved_config_path), migrated_legacy_config=migrated)
+
+
+def _resolve_ui_config_path(project_root: Path, config_path: str | None) -> Path:
+    if config_path:
+        return Path(config_path).resolve()
+    default_config_path, _, _ = _default_ui_paths(project_root)
+    return default_config_path
+
+
+def _password_prompt_needed(config_path: Path) -> bool:
+    if not config_path.exists():
+        return True
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    auth_payload = payload.get("auth", {})
+    return "password_hash" not in auth_payload and not auth_payload.get("password")
+
+
+def _prompt_for_password() -> str:
+    while True:
+        password = getpass.getpass("Admin password: ")
+        if not password:
+            print("Password cannot be empty.", file=sys.stderr)
+            continue
+        confirmation = getpass.getpass("Confirm password: ")
+        if password != confirmation:
+            print("Passwords did not match. Try again.", file=sys.stderr)
+            continue
+        return password
 
 
 def _parse_ui_config(payload: dict[str, Any], config_path: Path) -> UiConfig:
@@ -1503,7 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--project-root", help="Project root to manage; defaults to the detected workspace")
     init_parser.add_argument("--config", help="Override the UI config path")
     init_parser.add_argument("--username", default="admin", help="Admin username")
-    init_parser.add_argument("--password", help="Admin password; if omitted, a random password is generated")
+    init_parser.add_argument("--password", help="Admin password; if omitted, prompt interactively")
     init_parser.add_argument("--host", default="127.0.0.1", help="Host to bind; defaults to localhost")
     init_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
     init_parser.add_argument("--title", default="Mindex Control Deck", help="Browser title for the UI")
@@ -1523,9 +1552,12 @@ def main(argv: list[str] | None = None) -> int:
     project_root = Path(args.project_root).resolve() if getattr(args, "project_root", None) else find_project_root()
 
     if args.command == "init-config":
+        resolved_config_path = _resolve_ui_config_path(project_root, args.config)
+        if args.password is None and _password_prompt_needed(resolved_config_path):
+            args.password = _prompt_for_password()
         bootstrap = load_or_create_ui_config(
             project_root=project_root,
-            config_path=args.config,
+            config_path=resolved_config_path,
             username=args.username,
             password=args.password,
             host=args.host,
