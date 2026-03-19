@@ -428,14 +428,19 @@ class MindexUiApp:
 
     def _handle_session_run_finished(self, agent: AgentRecord) -> None:
         if agent.current_task_id and agent.queue_id:
-            final_status = "completed" if agent.status == "completed" else "failed"
             try:
-                self.task_queue_manager.update_task(agent.queue_id, agent.current_task_id, status=final_status)
+                if agent.stop_requested:
+                    self.task_queue_manager.requeue_task_to_front(agent.queue_id, agent.current_task_id)
+                else:
+                    final_status = "completed" if agent.status == "completed" else "failed"
+                    self.task_queue_manager.update_task(agent.queue_id, agent.current_task_id, status=final_status)
             except KeyError:
                 pass
         try:
             self.agent_manager.clear_current_task(agent.agent_id)
         except KeyError:
+            return
+        if agent.stop_requested:
             return
         self._start_next_queued_task(agent.agent_id)
 
@@ -476,6 +481,27 @@ class MindexUiApp:
             raise KeyError(agent_id)
         if started_task is None and agent.status != "running":
             raise ValueError("queue is empty")
+        queue: QueueRecord | None = None
+        if agent.queue_id:
+            try:
+                queue = self.task_queue_manager.get_queue(agent.queue_id)
+            except KeyError:
+                queue = None
+        return self._session_payload(agent, queue)
+
+    def stop_managed_session(self, agent_id: str, *, settle_timeout: float = 1.0) -> dict[str, Any]:
+        self.agent_manager.stop_agent(agent_id)
+        deadline = time.time() + settle_timeout
+        while time.time() < deadline:
+            agent = self.agent_manager.get_agent(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            if not agent.current_task_id and agent.status != "running":
+                break
+            time.sleep(0.05)
+        agent = self.agent_manager.get_agent(agent_id)
+        if agent is None:
+            raise KeyError(agent_id)
         queue: QueueRecord | None = None
         if agent.queue_id:
             try:
@@ -1483,15 +1509,14 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                 session_payload = self.app.start_managed_session(agent_id)
                 return _json_response(self, HTTPStatus.OK, {"session": session_payload})
             elif action == "stop":
-                agent = self.app.agent_manager.stop_agent(agent_id)
+                session_payload = self.app.stop_managed_session(agent_id)
+                return _json_response(self, HTTPStatus.OK, {"session": session_payload})
             else:
                 return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:
             return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
         except ValueError as exc:
             return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-        queues_by_id = {queue.queue_id: queue for queue in self.app.task_queue_manager.list_queues()}
-        _json_response(self, HTTPStatus.OK, {"session": self.app._session_payload(agent, queues_by_id.get(agent.queue_id))})
 
     def _handle_create_agent(self) -> None:
         if self._require_session(require_csrf=True) is None:

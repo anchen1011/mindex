@@ -143,6 +143,13 @@ class UiTests(unittest.TestCase):
             reordered = manager.reorder_tasks(queue.queue_id, [second.task_id, first.task_id])
             self.assertEqual([task.task_id for task in reordered.tasks], [second.task_id, first.task_id])
 
+            requeued = manager.requeue_task_to_front(queue.queue_id, first.task_id)
+            self.assertEqual(requeued.status, "queued")
+            self.assertEqual(
+                [task.task_id for task in manager.get_queue(queue.queue_id).tasks],
+                [first.task_id, second.task_id],
+            )
+
             manager.delete_task(queue.queue_id, first.task_id)
             queue_state = [item for item in manager.list_queues() if item.queue_id == queue.queue_id][0]
             self.assertEqual([task.task_id for task in queue_state.tasks], [second.task_id])
@@ -289,6 +296,36 @@ class UiTests(unittest.TestCase):
                 self.assertEqual(app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status, "completed")
                 self.assertEqual(app.task_queue_manager.get_task(queue_id, second_task["task_id"]).status, "running")
                 self.assertEqual(start_calls[1][0], ["exec", "Second queued task"])
+
+    def test_ui_app_stop_requeues_running_task_to_front(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret")
+            app = MindexUiApp(bootstrap.config)
+            managed = app.create_managed_session(name="Queue worker", workdir=root)
+            agent_id = managed["agent_id"]
+            queue_id = managed["queue"]["queue_id"]
+
+            first_task = app.task_queue_manager.add_task(queue_id, title="Currently running", status="running")
+            second_task = app.task_queue_manager.add_task(queue_id, title="Queued behind", status="queued")
+
+            agents = app.agent_manager._read_agents()
+            stored_agent = next(item for item in agents if item.agent_id == agent_id)
+            stored_agent.status = "queued"
+            stored_agent.current_task_id = first_task.task_id
+            stored_agent.stop_requested = True
+            app.agent_manager._write_agents(agents)
+
+            app._handle_session_run_finished(stored_agent)
+
+            queue = app.task_queue_manager.get_queue(queue_id)
+            self.assertEqual([task.task_id for task in queue.tasks], [first_task.task_id, second_task.task_id])
+            self.assertEqual(queue.tasks[0].status, "queued")
+            refreshed_agent = app.agent_manager.get_agent(agent_id)
+            self.assertIsNotNone(refreshed_agent)
+            self.assertEqual(refreshed_agent.current_task_id, "")
+            self.assertFalse(refreshed_agent.stop_requested)
 
     def test_cli_routes_ui_init_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

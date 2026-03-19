@@ -238,7 +238,8 @@ Implemented behavior:
   session-owned queue so upcoming work can be reprioritized directly in the
   browser, and automatically drives those tasks through `queued`, `running`,
   `completed`, or `failed` execution states instead of relying on manual task
-  status entry
+  status entry; stopping a session interrupts the active task and returns it to
+  the front of the queue so the next start resumes from that item
 - keeps agent workdirs constrained to the configured project root and launches
   agents as `python -m mindex ...` without going through a shell
 - persists agent state under `.mindex/task_queues.json` and writes per-agent

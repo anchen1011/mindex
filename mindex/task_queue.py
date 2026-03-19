@@ -91,6 +91,7 @@ class AgentRecord:
     log_path: str | None = None
     last_error: str | None = None
     current_task_id: str = ""
+    stop_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,6 +116,7 @@ class AgentRecord:
             log_path=payload.get("log_path"),
             last_error=payload.get("last_error"),
             current_task_id=str(payload.get("current_task_id", "")),
+            stop_requested=bool(payload.get("stop_requested", False)),
         )
 
 
@@ -314,6 +316,19 @@ class TaskQueueManager:
             self._write_queues(queues)
             return queue
 
+    def requeue_task_to_front(self, queue_id: str, task_id: str) -> TaskRecord:
+        with self._lock:
+            queues = self._read_queues()
+            queue = _find_queue(queues, queue_id)
+            task = _find_task(queue, task_id)
+            retained = [item for item in queue.tasks if item.task_id != task_id]
+            task.status = "queued"
+            task.updated_at = utc_now()
+            queue.tasks = [task, *retained]
+            queue.updated_at = task.updated_at
+            self._write_queues(queues)
+            return task
+
 
 class AgentManager:
     def __init__(
@@ -484,6 +499,7 @@ class AgentManager:
                 agent.last_error = None
                 if current_task_id is not None:
                     agent.current_task_id = current_task_id
+                agent.stop_requested = False
                 self._write_agents(agents)
                 if on_exit is not None:
                     threading.Thread(
@@ -507,6 +523,8 @@ class AgentManager:
                         agent.last_error = "The server no longer controls this process."
                         self._write_agents(agents)
                     return agent
+                agent.stop_requested = True
+                self._write_agents(agents)
                 process.terminate()
                 try:
                     process.wait(timeout=wait_timeout)
@@ -528,7 +546,11 @@ class AgentManager:
             return
         agent.returncode = returncode
         agent.finished_at = utc_now()
-        agent.status = "completed" if returncode == 0 else "failed"
+        if agent.stop_requested:
+            agent.status = "queued"
+            agent.last_error = "Interrupted by operator."
+        else:
+            agent.status = "completed" if returncode == 0 else "failed"
         self._processes.pop(agent.agent_id, None)
         handle = self._log_handles.pop(agent.agent_id, None)
         if handle is not None:
@@ -555,6 +577,7 @@ class AgentManager:
                 if agent.agent_id != agent_id:
                     continue
                 agent.current_task_id = ""
+                agent.stop_requested = False
                 self._write_agents(agents)
                 return agent
         raise KeyError(agent_id)
@@ -564,7 +587,9 @@ class AgentManager:
             agent = self.get_agent(agent_id)
             if agent is None:
                 return
-            if agent.status not in {"queued", "running"}:
+            with self._lock:
+                process_active = agent_id in self._processes
+            if not process_active and agent.status != "running":
                 on_exit(agent)
                 return
             time.sleep(0.05)
