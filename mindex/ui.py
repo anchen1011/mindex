@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from mindex.launcher import find_project_root
-from mindex.task_queue import AgentManager, StateStore, TaskQueueManager
+from mindex.task_queue import AgentManager, AgentRecord, QueueRecord, StateStore, TaskQueueManager, TaskRecord
 
 
 MAX_REQUEST_BYTES = 65536
@@ -408,6 +408,80 @@ class MindexUiApp:
         except Exception:
             self.task_queue_manager.delete_queue(queue.queue_id)
             raise
+        return self._session_payload(agent, queue)
+
+    def _agent_for_queue(self, queue_id: str) -> AgentRecord | None:
+        for agent in self.agent_manager.list_agents():
+            if agent.queue_id == queue_id:
+                return agent
+        return None
+
+    def _task_command_args(self, agent: AgentRecord, task: TaskRecord) -> list[str]:
+        if any("{task}" in argument for argument in agent.command_args):
+            return [argument.replace("{task}", task.title) for argument in agent.command_args]
+        if agent.command_args[:1] == ["exec"]:
+            if len(agent.command_args) == 1:
+                return [*agent.command_args, task.title]
+            if len(agent.command_args) == 2 and agent.command_args[1] == agent.name:
+                return ["exec", task.title]
+        return list(agent.command_args)
+
+    def _handle_session_run_finished(self, agent: AgentRecord) -> None:
+        if agent.current_task_id and agent.queue_id:
+            final_status = "completed" if agent.status == "completed" else "failed"
+            try:
+                self.task_queue_manager.update_task(agent.queue_id, agent.current_task_id, status=final_status)
+            except KeyError:
+                pass
+        try:
+            self.agent_manager.clear_current_task(agent.agent_id)
+        except KeyError:
+            return
+        self._start_next_queued_task(agent.agent_id)
+
+    def _start_next_queued_task(self, agent_id: str) -> dict[str, Any] | None:
+        agent = self.agent_manager.get_agent(agent_id)
+        if agent is None or agent.status == "running" or not agent.queue_id:
+            return None
+        try:
+            queue = self.task_queue_manager.get_queue(agent.queue_id)
+        except KeyError:
+            return None
+        if any(task.status == "running" for task in queue.tasks):
+            return None
+        next_task = next((task for task in queue.tasks if task.status == "queued"), None)
+        if next_task is None:
+            return None
+        running_task = self.task_queue_manager.update_task(queue.queue_id, next_task.task_id, status="running")
+        command_args = self._task_command_args(agent, running_task)
+        self.agent_manager._start_agent(
+            agent_id,
+            run_command_args=command_args,
+            current_task_id=running_task.task_id,
+            on_exit=self._handle_session_run_finished,
+        )
+        return self.task_queue_manager.get_task(queue.queue_id, running_task.task_id).to_dict()
+
+    def add_session_task(self, queue_id: str, *, title: str, details: str = "") -> dict[str, Any]:
+        created = self.task_queue_manager.add_task(queue_id, title=title, details=details, status="queued")
+        agent = self._agent_for_queue(queue_id)
+        if agent is not None and agent.status != "running":
+            self._start_next_queued_task(agent.agent_id)
+        return self.task_queue_manager.get_task(queue_id, created.task_id).to_dict()
+
+    def start_managed_session(self, agent_id: str) -> dict[str, Any]:
+        started_task = self._start_next_queued_task(agent_id)
+        agent = self.agent_manager.get_agent(agent_id)
+        if agent is None:
+            raise KeyError(agent_id)
+        if started_task is None and agent.status != "running":
+            raise ValueError("queue is empty")
+        queue: QueueRecord | None = None
+        if agent.queue_id:
+            try:
+                queue = self.task_queue_manager.get_queue(agent.queue_id)
+            except KeyError:
+                queue = None
         return self._session_payload(agent, queue)
 
     def delete_managed_session(self, agent_id: str) -> None:
@@ -920,10 +994,10 @@ function renderTaskCard(queueId, task) {
           <p class="task-title">${escapeHtml(task.title)}</p>
           <p class="task-details">${escapeHtml(task.details || 'No extra details.')}</p>
         </div>
-        <div class="${statusClass(task.status)}">${escapeHtml(String(task.status || 'pending').replace('_', ' '))}</div>
+        <div class="${statusClass(task.status)}">${escapeHtml(String(task.status || 'queued').replace('_', ' '))}</div>
       </div>
       <div class="button-row">
-        <button class="ghost" type="button" data-queue-id="${escapeHtml(queueId)}" data-edit-task="${escapeHtml(task.task_id)}" data-task-title="${escapeHtml(task.title)}" data-task-details="${escapeHtml(task.details || '')}" data-task-status="${escapeHtml(task.status || 'pending')}">Edit task</button>
+        <button class="ghost" type="button" data-queue-id="${escapeHtml(queueId)}" data-edit-task="${escapeHtml(task.task_id)}" data-task-title="${escapeHtml(task.title)}" data-task-details="${escapeHtml(task.details || '')}">Edit task</button>
         <button class="danger" type="button" data-queue-id="${escapeHtml(queueId)}" data-delete-task="${escapeHtml(task.task_id)}">Delete</button>
       </div>
     </li>`;
@@ -970,7 +1044,6 @@ function renderSessionCard(session) {
             <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}">
               <label>Task title<input name="title" placeholder="Review failing output" required></label>
               <label>Task details<textarea name="details" placeholder="Acceptance notes or extra context."></textarea></label>
-              <label>Status<select name="status"><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option></select></label>
               <div class="button-row"><button class="secondary" type="submit">Add queue item</button></div>
             </form>
           ` : '<div class="empty-state">This legacy session does not have a queue attached.</div>'}
@@ -1022,7 +1095,7 @@ function renderDashboard(payload) {
   document.getElementById('logout-button').addEventListener('click', logout);
   document.querySelectorAll('[data-edit-queue]').forEach(node => node.addEventListener('click', () => renameQueue(node.dataset.editQueue, node.dataset.queueName || '', node.dataset.queueDescription || '')));
   document.querySelectorAll('[data-task-form]').forEach(node => node.addEventListener('submit', submitTask));
-  document.querySelectorAll('[data-edit-task]').forEach(node => node.addEventListener('click', () => editTask(node.dataset.queueId, node.dataset.editTask, node.dataset.taskTitle || '', node.dataset.taskDetails || '', node.dataset.taskStatus || 'pending')));
+  document.querySelectorAll('[data-edit-task]').forEach(node => node.addEventListener('click', () => editTask(node.dataset.queueId, node.dataset.editTask, node.dataset.taskTitle || '', node.dataset.taskDetails || '')));
   document.querySelectorAll('[data-delete-task]').forEach(node => node.addEventListener('click', () => removeTask(node.dataset.queueId, node.dataset.deleteTask)));
   document.querySelectorAll('[data-start-session]').forEach(node => node.addEventListener('click', () => changeSession(node.dataset.startSession, 'start')));
   document.querySelectorAll('[data-stop-session]').forEach(node => node.addEventListener('click', () => changeSession(node.dataset.stopSession, 'stop')));
@@ -1100,7 +1173,6 @@ async function submitTask(event) {
       body: JSON.stringify({
         title: form.get('title'),
         details: form.get('details'),
-        status: form.get('status'),
       }),
     });
     if (typeof formElement.reset === 'function') {
@@ -1112,7 +1184,7 @@ async function submitTask(event) {
   }
 }
 
-async function editTask(queueId, taskId, currentTitle, currentDetails, currentStatus) {
+async function editTask(queueId, taskId, currentTitle, currentDetails) {
   const title = window.prompt('Task title', currentTitle);
   if (title === null) {
     return;
@@ -1121,14 +1193,10 @@ async function editTask(queueId, taskId, currentTitle, currentDetails, currentSt
   if (details === null) {
     return;
   }
-  const status = window.prompt('Status: pending, in_progress, blocked, done', currentStatus);
-  if (status === null) {
-    return;
-  }
   try {
     await api(`/api/queues/${queueId}/tasks/${taskId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ title, details, status }),
+      body: JSON.stringify({ title, details }),
     });
     await loadDashboard();
   } catch (error) {
@@ -1412,13 +1480,16 @@ class UiRequestHandler(BaseHTTPRequestHandler):
         action = segments[3]
         try:
             if action == "start":
-                agent = self.app.agent_manager.start_agent(agent_id)
+                session_payload = self.app.start_managed_session(agent_id)
+                return _json_response(self, HTTPStatus.OK, {"session": session_payload})
             elif action == "stop":
                 agent = self.app.agent_manager.stop_agent(agent_id)
             else:
                 return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:
             return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
+        except ValueError as exc:
+            return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         queues_by_id = {queue.queue_id: queue for queue in self.app.task_queue_manager.list_queues()}
         _json_response(self, HTTPStatus.OK, {"session": self.app._session_payload(agent, queues_by_id.get(agent.queue_id))})
 
@@ -1516,13 +1587,12 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                 payload = self._read_json_body()
                 if payload is None:
                     return
-                task = self.app.task_queue_manager.add_task(
+                task = self.app.add_session_task(
                     queue_id,
                     title=str(payload.get("title", "")),
                     details=str(payload.get("details", "")),
-                    status=str(payload.get("status", "pending")),
                 )
-                return _json_response(self, HTTPStatus.CREATED, {"task": task.to_dict()})
+                return _json_response(self, HTTPStatus.CREATED, {"task": task})
             if len(segments) == 5 and segments[3] == "tasks":
                 task_id = segments[4]
                 if self.command == "PATCH":
@@ -1534,7 +1604,6 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                         task_id,
                         title=payload.get("title"),
                         details=payload.get("details"),
-                        status=payload.get("status"),
                     )
                     return _json_response(self, HTTPStatus.OK, {"task": task.to_dict()})
                 if self.command == "DELETE":

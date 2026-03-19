@@ -39,7 +39,7 @@ class TaskRecord:
             task_id=str(payload.get("task_id") or f"task-{uuid.uuid4().hex[:12]}"),
             title=str(payload.get("title", "Untitled task")),
             details=str(payload.get("details", "")),
-            status=str(payload.get("status", "pending")),
+            status=_normalize_task_status(str(payload.get("status", "queued"))),
             created_at=str(payload.get("created_at", timestamp)),
             updated_at=timestamp,
         )
@@ -90,6 +90,7 @@ class AgentRecord:
     returncode: int | None = None
     log_path: str | None = None
     last_error: str | None = None
+    current_task_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,6 +114,7 @@ class AgentRecord:
             returncode=payload.get("returncode"),
             log_path=payload.get("log_path"),
             last_error=payload.get("last_error"),
+            current_task_id=str(payload.get("current_task_id", "")),
         )
 
 
@@ -174,6 +176,14 @@ class TaskQueueManager:
     def list_queues(self) -> list[QueueRecord]:
         with self._lock:
             return self._read_queues()
+
+    def get_queue(self, queue_id: str) -> QueueRecord:
+        with self._lock:
+            return _find_queue(self._read_queues(), queue_id)
+
+    def get_task(self, queue_id: str, task_id: str) -> TaskRecord:
+        with self._lock:
+            return _find_task(_find_queue(self._read_queues(), queue_id), task_id)
 
     def ensure_default_queue(self) -> QueueRecord:
         with self._lock:
@@ -238,7 +248,7 @@ class TaskQueueManager:
         *,
         title: str,
         details: str = "",
-        status: str = "pending",
+        status: str = "queued",
     ) -> TaskRecord:
         timestamp = utc_now()
         task = TaskRecord(
@@ -417,6 +427,16 @@ class AgentManager:
                 handle.close()
 
     def start_agent(self, agent_id: str) -> AgentRecord:
+        return self._start_agent(agent_id)
+
+    def _start_agent(
+        self,
+        agent_id: str,
+        *,
+        run_command_args: list[str] | None = None,
+        current_task_id: str | None = None,
+        on_exit: Any | None = None,
+    ) -> AgentRecord:
         with self._lock:
             agents = self._read_agents()
             for agent in agents:
@@ -437,12 +457,13 @@ class AgentManager:
                 )
                 if agent.feature_branch:
                     env["MINDEX_FEATURE_BRANCH"] = agent.feature_branch
+                effective_command_args = list(run_command_args or agent.command_args)
                 stdout_handle = log_path.open("a", encoding="utf-8")
-                stdout_handle.write(f"[{utc_now()}] starting {' '.join(agent.command_args)}\n")
+                stdout_handle.write(f"[{utc_now()}] starting {' '.join(effective_command_args)}\n")
                 stdout_handle.flush()
                 try:
                     process = subprocess.Popen(
-                        [sys.executable, "-m", "mindex", *agent.command_args],
+                        [sys.executable, "-m", "mindex", *effective_command_args],
                         cwd=agent.workdir,
                         env=env,
                         stdout=stdout_handle,
@@ -461,7 +482,15 @@ class AgentManager:
                 agent.pid = process.pid
                 agent.log_path = str(log_path)
                 agent.last_error = None
+                if current_task_id is not None:
+                    agent.current_task_id = current_task_id
                 self._write_agents(agents)
+                if on_exit is not None:
+                    threading.Thread(
+                        target=self._wait_and_notify,
+                        args=(agent.agent_id, on_exit),
+                        daemon=True,
+                    ).start()
                 return agent
         raise KeyError(agent_id)
 
@@ -519,6 +548,27 @@ class AgentManager:
             raise KeyError(agent_id)
         return agent
 
+    def clear_current_task(self, agent_id: str) -> AgentRecord:
+        with self._lock:
+            agents = self._read_agents()
+            for agent in agents:
+                if agent.agent_id != agent_id:
+                    continue
+                agent.current_task_id = ""
+                self._write_agents(agents)
+                return agent
+        raise KeyError(agent_id)
+
+    def _wait_and_notify(self, agent_id: str, on_exit: Any) -> None:
+        while True:
+            agent = self.get_agent(agent_id)
+            if agent is None:
+                return
+            if agent.status not in {"queued", "running"}:
+                on_exit(agent)
+                return
+            time.sleep(0.05)
+
     def _validate_workdir(self, workdir: Path) -> None:
         if workdir == self.project_root:
             return
@@ -541,9 +591,16 @@ def _find_task(queue: QueueRecord, task_id: str) -> TaskRecord:
 
 
 def _normalize_task_status(status: str) -> str:
-    candidate = status.strip().lower() or "pending"
-    if candidate not in {"pending", "in_progress", "done", "blocked"}:
-        raise ValueError("status must be one of: pending, in_progress, done, blocked")
+    candidate = status.strip().lower() or "queued"
+    aliases = {
+        "pending": "queued",
+        "in_progress": "running",
+        "done": "completed",
+        "complete": "completed",
+    }
+    candidate = aliases.get(candidate, candidate)
+    if candidate not in {"queued", "running", "completed", "failed", "blocked"}:
+        raise ValueError("status must be one of: queued, running, completed, failed, blocked")
     return candidate
 
 

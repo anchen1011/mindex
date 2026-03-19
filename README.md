@@ -236,7 +236,9 @@ Implemented behavior:
   queue names, queue descriptions, and ordered task lists per managed session
 - lets users add, edit, delete, and drag-to-reorder tasks inside each
   session-owned queue so upcoming work can be reprioritized directly in the
-  browser
+  browser, and automatically drives those tasks through `queued`, `running`,
+  `completed`, or `failed` execution states instead of relying on manual task
+  status entry
 - keeps agent workdirs constrained to the configured project root and launches
   agents as `python -m mindex ...` without going through a shell
 - persists agent state under `.mindex/task_queues.json` and writes per-agent
