@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from mindex.launcher import find_project_root
@@ -30,6 +30,8 @@ DEFAULT_LOGIN_WINDOW_SECONDS = 5 * 60
 DEFAULT_LOGIN_ATTEMPTS = 5
 PASSWORD_ITERATIONS = 390000
 COOKIE_NAME = "mindex_session"
+DEV_OVERRIDE_ENV = "MINDEX_UI_EPHEMERAL_OVERRIDES"
+DEFAULT_DEV_POLL_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -1652,6 +1654,133 @@ def serve_ui(config: UiConfig) -> int:
     return 0
 
 
+def _apply_runtime_overrides(
+    config: UiConfig,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    disable_origin_checks: bool = False,
+    disable_csrf_checks: bool = False,
+) -> UiConfig:
+    next_host = host or config.host
+    next_port = config.port if port is None else port
+    next_disable_origin = config.disable_origin_checks or disable_origin_checks
+    next_disable_csrf = config.disable_csrf_checks or disable_csrf_checks
+    explicit_origins: list[str] = []
+    try:
+        payload = json.loads(config.config_path.read_text(encoding="utf-8"))
+        explicit_origins = [str(value) for value in payload.get("server", {}).get("allowed_origins", [])]
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        explicit_origins = []
+    return replace(
+        config,
+        host=next_host,
+        port=next_port,
+        disable_origin_checks=next_disable_origin,
+        disable_csrf_checks=next_disable_csrf,
+        allowed_origins=_normalize_allowed_origins(next_host, next_port, explicit_origins),
+    )
+
+
+def _build_dev_child_command(config: UiConfig) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "mindex",
+        "ui",
+        "serve",
+        "--project-root",
+        str(config.project_root),
+        "--config",
+        str(config.config_path),
+        "--host",
+        config.host,
+        "--port",
+        str(config.port),
+        "--disable-origin-checks",
+        "--disable-csrf-checks",
+    ]
+
+
+def _watch_state(paths: Iterable[Path]) -> dict[Path, int | None]:
+    state: dict[Path, int | None] = {}
+    for path in paths:
+        try:
+            state[path] = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            state[path] = None
+    return state
+
+
+def _changed_watch_paths(before: dict[Path, int | None], after: dict[Path, int | None]) -> list[Path]:
+    changed: list[Path] = []
+    for path in sorted(set(before) | set(after)):
+        if before.get(path) != after.get(path):
+            changed.append(path)
+    return changed
+
+
+def _default_dev_watch_paths(config: UiConfig) -> tuple[Path, ...]:
+    source_root = Path(__file__).resolve().parent
+    paths = {config.config_path.resolve()}
+    paths.update(sorted(source_root.glob("*.py")))
+    return tuple(sorted(paths))
+
+
+def _stop_dev_child(process: subprocess.Popen[str], *, timeout: float = 2.0) -> int:
+    if process.poll() is not None:
+        return process.returncode or 0
+    process.terminate()
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return process.wait(timeout=timeout)
+
+
+def serve_ui_dev(
+    config: UiConfig,
+    *,
+    watch_paths: Iterable[Path] | None = None,
+    poll_interval: float = DEFAULT_DEV_POLL_SECONDS,
+    popen_factory: Any = subprocess.Popen,
+    watch_state_loader: Any = _watch_state,
+) -> int:
+    watched_paths = tuple(watch_paths or _default_dev_watch_paths(config))
+    previous_state = watch_state_loader(watched_paths)
+    child_env = os.environ.copy()
+    child_env[DEV_OVERRIDE_ENV] = "1"
+    command = _build_dev_child_command(config)
+    start_new_session = os.name != "nt"
+    print(
+        f"Starting Mindex UI dev mode with auto-restart; watching {len(watched_paths)} files and disabling origin/CSRF checks in the child server.",
+        file=sys.stderr,
+    )
+    child: subprocess.Popen[str] | None = None
+    try:
+        while True:
+            child = popen_factory(command, env=child_env, start_new_session=start_new_session)
+            while True:
+                current_state = watch_state_loader(watched_paths)
+                changed_paths = _changed_watch_paths(previous_state, current_state)
+                if changed_paths:
+                    previous_state = current_state
+                    print(f"Detected UI code change in {changed_paths[0]}; restarting dev server.", file=sys.stderr)
+                    _stop_dev_child(child)
+                    child = None
+                    break
+                returncode = child.poll()
+                if returncode is not None:
+                    return returncode
+                time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        print("Stopping Mindex UI dev mode...", file=sys.stderr)
+        return 0
+    finally:
+        if child is not None:
+            _stop_dev_child(child)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Mindex web UI controls")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1681,6 +1810,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--config", help="Override the UI config path")
     serve_parser.add_argument("--host", help="Override the configured host")
     serve_parser.add_argument("--port", type=int, help="Override the configured port")
+    serve_parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Run a watched development server that auto-restarts on Mindex UI code changes and disables origin/CSRF checks in the child process",
+    )
     serve_parser.add_argument(
         "--disable-origin-checks",
         action="store_true",
@@ -1725,21 +1859,27 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         bootstrap = load_or_create_ui_config(project_root=project_root, config_path=args.config)
-        config = bootstrap.config
-        if args.host or args.port or args.disable_origin_checks or args.disable_csrf_checks:
+        config = _apply_runtime_overrides(
+            bootstrap.config,
+            host=args.host,
+            port=args.port,
+            disable_origin_checks=args.disable_origin_checks,
+            disable_csrf_checks=args.disable_csrf_checks,
+        )
+        if os.environ.get(DEV_OVERRIDE_ENV) != "1" and (
+            args.host or args.port is not None or args.disable_origin_checks or args.disable_csrf_checks
+        ):
             payload = json.loads(config.config_path.read_text(encoding="utf-8"))
-            if args.host:
-                payload.setdefault("server", {})["host"] = args.host
-            if args.port:
-                payload.setdefault("server", {})["port"] = args.port
-            if args.disable_origin_checks:
-                payload.setdefault("server", {})["disable_origin_checks"] = True
-            if args.disable_csrf_checks:
-                payload.setdefault("server", {})["disable_csrf_checks"] = True
+            server_payload = payload.setdefault("server", {})
+            server_payload["host"] = config.host
+            server_payload["port"] = config.port
+            server_payload["disable_origin_checks"] = config.disable_origin_checks
+            server_payload["disable_csrf_checks"] = config.disable_csrf_checks
             _write_private_json(config.config_path, payload)
-            config = _parse_ui_config(payload, config.config_path)
         if bootstrap.generated_password:
             print(f"Generated UI password: {bootstrap.generated_password}", file=sys.stderr)
+        if args.dev and os.environ.get(DEV_OVERRIDE_ENV) != "1":
+            return serve_ui_dev(config)
         return serve_ui(config)
 
     parser.error(f"unsupported command: {args.command}")

@@ -210,6 +210,7 @@ Current commands:
 
 - `mindex ui init-config --project-root <root>`
 - `mindex ui serve --project-root <root>`
+- `mindex ui serve --project-root <root> --dev`
 
 Implemented behavior:
 
@@ -227,6 +228,10 @@ Implemented behavior:
 - supports explicit `--disable-origin-checks` and `--disable-csrf-checks`
   overrides for operators who need to bypass those protections in public or
   cross-origin deployments
+- supports `mindex ui serve --dev` for local iteration, which watches the
+  packaged `mindex/*.py` UI code plus `.mindex/ui_config.json`, restarts the
+  child server on changes, and disables origin/CSRF checks in that dev child
+  without permanently rewriting the saved UI config
 - persists session queue state under `.mindex/task_queues.json`, including
   queue names, queue descriptions, and ordered task lists per managed session
 - lets users add, edit, delete, and drag-to-reorder tasks inside each

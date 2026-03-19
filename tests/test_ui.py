@@ -12,6 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -287,6 +288,105 @@ class UiTests(unittest.TestCase):
             self.assertTrue(payload["allow_remote"])
             self.assertTrue(payload["disable_origin_checks"])
             self.assertTrue(payload["disable_csrf_checks"])
+
+    def test_build_dev_child_command_enables_relaxed_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret", port=3210)
+
+            command = ui_module._build_dev_child_command(bootstrap.config)
+
+            self.assertEqual(
+                command,
+                [
+                    mock.ANY,
+                    "-m",
+                    "mindex",
+                    "ui",
+                    "serve",
+                    "--project-root",
+                    str(root.resolve()),
+                    "--config",
+                    str((root / ".mindex" / "ui_config.json").resolve()),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "3210",
+                    "--disable-origin-checks",
+                    "--disable-csrf-checks",
+                ],
+            )
+
+    def test_serve_ui_dev_restarts_child_after_watch_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret", port=3210)
+            watched_file = root / "watched.py"
+            watched_file.write_text("print('v1')\n", encoding="utf-8")
+
+            class FakeProcess:
+                def __init__(self, *, exit_immediately: bool) -> None:
+                    self.exit_immediately = exit_immediately
+                    self.terminated = False
+                    self.killed = False
+                    self.returncode = 0 if exit_immediately else None
+
+                def poll(self):
+                    if self.terminated or self.killed:
+                        return 0
+                    return self.returncode
+
+                def terminate(self):
+                    self.terminated = True
+                    self.returncode = 0
+
+                def wait(self, timeout=None):
+                    self.terminated = True
+                    self.returncode = 0
+                    return 0
+
+                def kill(self):
+                    self.killed = True
+                    self.returncode = 0
+
+            started_processes: list[FakeProcess] = []
+            popen_calls: list[dict[str, object]] = []
+
+            def fake_popen(command, env=None, start_new_session=None):
+                process = FakeProcess(exit_immediately=len(started_processes) == 1)
+                started_processes.append(process)
+                popen_calls.append(
+                    {
+                        "command": command,
+                        "env": env,
+                        "start_new_session": start_new_session,
+                    }
+                )
+                return process
+
+            watch_states = iter(
+                [
+                    {watched_file: 1},
+                    {watched_file: 2},
+                    {watched_file: 2},
+                ]
+            )
+
+            result = ui_module.serve_ui_dev(
+                bootstrap.config,
+                watch_paths=[watched_file],
+                poll_interval=0.0,
+                popen_factory=fake_popen,
+                watch_state_loader=lambda paths: next(watch_states),
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(len(started_processes), 2)
+            self.assertTrue(started_processes[0].terminated)
+            self.assertEqual(popen_calls[0]["command"], ui_module._build_dev_child_command(bootstrap.config))
+            self.assertEqual(popen_calls[0]["env"][ui_module.DEV_OVERRIDE_ENV], "1")
 
     def test_submit_handlers_survive_current_target_clearing(self) -> None:
         node = shutil.which("node")
