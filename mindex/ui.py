@@ -418,13 +418,20 @@ class MindexUiApp:
 
     def _task_command_args(self, agent: AgentRecord, task: TaskRecord) -> list[str]:
         if any("{task}" in argument for argument in agent.command_args):
-            return [argument.replace("{task}", task.title) for argument in agent.command_args]
+            return self._normalize_exec_task_args([argument.replace("{task}", task.title) for argument in agent.command_args])
         if agent.command_args[:1] == ["exec"]:
             if len(agent.command_args) == 1:
-                return [*agent.command_args, task.title]
+                return self._normalize_exec_task_args([*agent.command_args, task.title])
             if len(agent.command_args) == 2 and agent.command_args[1] == agent.name:
-                return ["exec", task.title]
-        return list(agent.command_args)
+                return self._normalize_exec_task_args(["exec", task.title])
+        return self._normalize_exec_task_args(list(agent.command_args))
+
+    def _normalize_exec_task_args(self, command_args: list[str]) -> list[str]:
+        if command_args[:1] != ["exec"]:
+            return command_args
+        if "--skip-git-repo-check" in command_args[1:]:
+            return command_args
+        return ["exec", "--skip-git-repo-check", *command_args[1:]]
 
     def _handle_session_run_finished(self, agent: AgentRecord) -> None:
         if agent.current_task_id and agent.queue_id:

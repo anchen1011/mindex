@@ -284,7 +284,7 @@ class UiTests(unittest.TestCase):
 
                 self.assertEqual(first_task["status"], "running")
                 self.assertEqual(second_task["status"], "queued")
-                self.assertEqual(start_calls[0][0], ["exec", "First queued task"])
+                self.assertEqual(start_calls[0][0], ["exec", "--skip-git-repo-check", "First queued task"])
 
                 agents = app.agent_manager._read_agents()
                 completed_agent = next(item for item in agents if item.agent_id == agent_id)
@@ -297,7 +297,7 @@ class UiTests(unittest.TestCase):
 
                 self.assertEqual(app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status, "completed")
                 self.assertEqual(app.task_queue_manager.get_task(queue_id, second_task["task_id"]).status, "running")
-                self.assertEqual(start_calls[1][0], ["exec", "Second queued task"])
+                self.assertEqual(start_calls[1][0], ["exec", "--skip-git-repo-check", "Second queued task"])
 
     def test_ui_app_stop_requeues_running_task_to_front(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -328,6 +328,58 @@ class UiTests(unittest.TestCase):
             self.assertIsNotNone(refreshed_agent)
             self.assertEqual(refreshed_agent.current_task_id, "")
             self.assertFalse(refreshed_agent.stop_requested)
+
+    def test_ui_app_exec_tasks_bypass_git_repo_check_in_non_git_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            fake_codex = Path(tmpdir) / "fake-codex"
+            output_path = Path(tmpdir) / "codex-output.json"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret")
+            app = MindexUiApp(bootstrap.config)
+            managed = app.create_managed_session(name="Queue worker", workdir=root)
+            queue_id = managed["queue"]["queue_id"]
+            agent_id = managed["agent_id"]
+
+            env_updates = {
+                "MINDEX_CODEX_BIN": str(fake_codex),
+                "MINDEX_DISABLE_SCRIPT": "1",
+                "MINDEX_SKIP_AUTO_PUBLISH": "1",
+                "MINDEX_FAKE_OUTPUT": str(output_path),
+            }
+            original_env = {key: os.environ.get(key) for key in env_updates}
+            try:
+                os.environ.update(env_updates)
+                task = app.add_session_task(queue_id, title="ls", details="List files")
+                completed = app.agent_manager.wait_for_agent(agent_id, timeout=10)
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    refreshed_agent = app.agent_manager.get_agent(agent_id)
+                    refreshed_task = app.task_queue_manager.get_task(queue_id, task["task_id"])
+                    if refreshed_agent is not None and refreshed_agent.current_task_id == "" and refreshed_task.status == "completed":
+                        break
+                    time.sleep(0.05)
+            finally:
+                for key, value in original_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertEqual(completed.status, "completed")
+            self.assertEqual(task["status"], "running")
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cwd"], str(root.resolve()))
+            self.assertEqual(payload["args"][:3], ["exec", "--skip-git-repo-check", "ls"])
 
     def test_cli_routes_ui_init_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

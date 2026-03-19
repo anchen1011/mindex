@@ -243,7 +243,9 @@ Implemented behavior:
 - presents each session itself as either `running` or `stopped`, and visually
   highlights the front queue item when it is the active running task
 - keeps agent workdirs constrained to the configured project root and launches
-  agents as `python -m mindex ...` without going through a shell
+  agents as `python -m mindex ...` without going through a shell; queued
+  `exec` tasks automatically add `--skip-git-repo-check` so session-managed
+  work can still run inside non-git workspaces that Mindex explicitly manages
 - persists agent state under `.mindex/task_queues.json` and writes per-agent
   output under `.mindex/queue_logs/`
 - migrates legacy `.mindex/ui_config.json` files that still contain a plaintext
