@@ -544,6 +544,8 @@ class MindexUiApp:
 
     def _session_payload(self, agent: Any, queue: Any | None) -> dict[str, Any]:
         payload = agent.to_dict() if hasattr(agent, "to_dict") else dict(agent)
+        payload["agent_status"] = payload.get("status", "stopped")
+        payload["status"] = "running" if payload.get("agent_status") == "running" else "stopped"
         queue_payload = queue.to_dict() if queue is not None and hasattr(queue, "to_dict") else (queue or {})
         payload["queue"] = queue_payload
         payload["output"] = self._read_output(payload.get("log_path"))
@@ -808,6 +810,7 @@ code,
   color: var(--muted);
 }
 .status-running, .status-in-progress { background: rgba(206, 161, 71, 0.22); color: #875b00; }
+.status-stopped { background: rgba(25, 22, 17, 0.08); color: var(--muted); }
 .status-completed, .status-done { background: rgba(41, 82, 68, 0.14); color: var(--sage); }
 .status-failed { background: rgba(139, 47, 61, 0.12); color: var(--danger); }
 .status-blocked, .status-disconnected { background: rgba(90, 70, 42, 0.14); color: #70552c; }
@@ -870,6 +873,10 @@ code,
   cursor: grab;
   display: grid;
   gap: 10px;
+}
+.task-item-front-running {
+  border-color: rgba(139, 47, 61, 0.56);
+  box-shadow: 0 0 0 2px rgba(139, 47, 61, 0.18), var(--shadow);
 }
 .task-item.dragging {
   opacity: 0.5;
@@ -1012,9 +1019,10 @@ async function submitLogin(event) {
   }
 }
 
-function renderTaskCard(queueId, task) {
+function renderTaskCard(queueId, task, isFrontRunning = false) {
+  const taskClassName = isFrontRunning ? 'task-item task-item-front-running' : 'task-item';
   return `
-    <li class="task-item" draggable="true" data-task-id="${escapeHtml(task.task_id)}" data-queue-id="${escapeHtml(queueId)}">
+    <li class="${taskClassName}" draggable="true" data-task-id="${escapeHtml(task.task_id)}" data-queue-id="${escapeHtml(queueId)}">
       <div class="task-head">
         <div>
           <p class="task-title">${escapeHtml(task.title)}</p>
@@ -1065,7 +1073,7 @@ function renderSessionCard(session) {
           </div>
           ${queue.queue_id ? `
             <ul class="task-list" data-task-list="${escapeHtml(queue.queue_id)}">
-              ${tasks.length ? tasks.map(task => renderTaskCard(queue.queue_id, task)).join('') : '<li class="empty-state">No queue items yet.</li>'}
+              ${tasks.length ? tasks.map((task, index) => renderTaskCard(queue.queue_id, task, index === 0 && task.status === 'running')).join('') : '<li class="empty-state">No queue items yet.</li>'}
             </ul>
             <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}">
               <label>Task title<input name="title" placeholder="Review failing output" required></label>

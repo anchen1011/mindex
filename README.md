@@ -240,6 +240,8 @@ Implemented behavior:
   `completed`, or `failed` execution states instead of relying on manual task
   status entry; stopping a session interrupts the active task and returns it to
   the front of the queue so the next start resumes from that item
+- presents each session itself as either `running` or `stopped`, and visually
+  highlights the front queue item when it is the active running task
 - keeps agent workdirs constrained to the configured project root and launches
   agents as `python -m mindex ...` without going through a shell
 - persists agent state under `.mindex/task_queues.json` and writes per-agent

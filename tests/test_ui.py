@@ -239,6 +239,8 @@ class UiTests(unittest.TestCase):
             self.assertTrue(payload["security"]["csrf_protected"])
             self.assertEqual(len(payload["sessions"]), 1)
             session_payload = payload["sessions"][0]
+            self.assertEqual(session_payload["status"], "stopped")
+            self.assertEqual(session_payload["agent_status"], "completed")
             self.assertEqual(session_payload["agent_id"], agent_id)
             self.assertEqual(session_payload["queue"]["queue_id"], queue_id)
             self.assertEqual(session_payload["queue"]["tasks"][0]["task_id"], task["task_id"])
@@ -636,6 +638,73 @@ const taskEvent = {{
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "node submit-handler test failed")
 
+    def test_render_session_card_highlights_front_running_item(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+
+        script = f"""
+const vm = require('vm');
+
+let source = {APP_JS!r};
+source = source.replace(/\\nloadDashboard\\(\\);\\s*$/, '\\n');
+
+global.document = {{
+  getElementById() {{
+    return {{
+      addEventListener() {{}},
+      classList: {{ add() {{}}, remove() {{}} }},
+      innerHTML: '',
+      textContent: '',
+    }};
+  }},
+  querySelectorAll() {{
+    return [];
+  }},
+  createElement() {{
+    return {{
+      textContent: '',
+      innerHTML: '',
+    }};
+  }},
+}};
+
+global.window = {{
+  prompt() {{ return null; }},
+  confirm() {{ return false; }},
+}};
+
+global.alert = () => {{}};
+vm.runInThisContext(source, {{ filename: 'app.js' }});
+
+const html = renderSessionCard({{
+  agent_id: 'agent-1',
+  name: 'Queue worker',
+  status: 'running',
+  workdir: '/repo',
+  output: '',
+  queue: {{
+    queue_id: 'queue-1',
+    name: 'Queue worker',
+    description: 'Queue',
+    tasks: [
+      {{ task_id: 'task-1', title: 'Current', details: '', status: 'running' }},
+      {{ task_id: 'task-2', title: 'Next', details: '', status: 'queued' }},
+    ],
+  }},
+}});
+
+if (!html.includes('task-item task-item-front-running')) {{
+  throw new Error('missing front-running task class');
+}}
+if ((html.match(/task-item-front-running/g) || []).length !== 1) {{
+  throw new Error('unexpected number of front-running classes');
+}}
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout or "node render-session test failed")
+
     def test_submit_handlers_tolerate_missing_form_target(self) -> None:
         node = shutil.which("node")
         if not node:
@@ -813,7 +882,8 @@ api = async () => {{
                     self.assertLess(time.time(), deadline, "timed out waiting for the managed session to finish")
                     time.sleep(0.1)
 
-                self.assertEqual(live_session["status"], "completed")
+                self.assertEqual(live_session["status"], "stopped")
+                self.assertEqual(live_session["agent_status"], "completed")
                 self.assertIn("starting --version", live_session["output"])
                 self.assertEqual(
                     [task["task_id"] for task in live_session["queue"]["tasks"]],
