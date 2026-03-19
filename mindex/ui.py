@@ -1702,6 +1702,19 @@ def _build_dev_child_command(config: UiConfig) -> list[str]:
     ]
 
 
+def _build_dev_child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    source_root = Path(__file__).resolve().parents[1]
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{source_root}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else str(source_root)
+    )
+    env[DEV_OVERRIDE_ENV] = "1"
+    return env
+
+
 def _watch_state(paths: Iterable[Path]) -> dict[Path, int | None]:
     state: dict[Path, int | None] = {}
     for path in paths:
@@ -1748,8 +1761,7 @@ def serve_ui_dev(
 ) -> int:
     watched_paths = tuple(watch_paths or _default_dev_watch_paths(config))
     previous_state = watch_state_loader(watched_paths)
-    child_env = os.environ.copy()
-    child_env[DEV_OVERRIDE_ENV] = "1"
+    child_env = _build_dev_child_env()
     command = _build_dev_child_command(config)
     start_new_session = os.name != "nt"
     print(
@@ -1759,7 +1771,12 @@ def serve_ui_dev(
     child: subprocess.Popen[str] | None = None
     try:
         while True:
-            child = popen_factory(command, env=child_env, start_new_session=start_new_session)
+            child = popen_factory(
+                command,
+                cwd=str(config.project_root),
+                env=child_env,
+                start_new_session=start_new_session,
+            )
             while True:
                 current_state = watch_state_loader(watched_paths)
                 changed_paths = _changed_watch_paths(previous_state, current_state)

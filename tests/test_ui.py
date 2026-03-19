@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 import http.cookiejar
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -318,6 +319,12 @@ class UiTests(unittest.TestCase):
                 ],
             )
 
+    def test_build_dev_child_env_includes_source_root_override(self) -> None:
+        env = ui_module._build_dev_child_env()
+
+        self.assertEqual(env[ui_module.DEV_OVERRIDE_ENV], "1")
+        self.assertIn(str(Path(ui_module.__file__).resolve().parents[1]), env["PYTHONPATH"].split(os.pathsep))
+
     def test_serve_ui_dev_restarts_child_after_watch_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -354,12 +361,13 @@ class UiTests(unittest.TestCase):
             started_processes: list[FakeProcess] = []
             popen_calls: list[dict[str, object]] = []
 
-            def fake_popen(command, env=None, start_new_session=None):
+            def fake_popen(command, cwd=None, env=None, start_new_session=None):
                 process = FakeProcess(exit_immediately=len(started_processes) == 1)
                 started_processes.append(process)
                 popen_calls.append(
                     {
                         "command": command,
+                        "cwd": cwd,
                         "env": env,
                         "start_new_session": start_new_session,
                     }
@@ -387,6 +395,24 @@ class UiTests(unittest.TestCase):
             self.assertTrue(started_processes[0].terminated)
             self.assertEqual(popen_calls[0]["command"], ui_module._build_dev_child_command(bootstrap.config))
             self.assertEqual(popen_calls[0]["env"][ui_module.DEV_OVERRIDE_ENV], "1")
+            self.assertEqual(popen_calls[0]["cwd"], str(root.resolve()))
+
+    def test_dev_child_env_fixes_import_from_parent_directory(self) -> None:
+        env = ui_module._build_dev_child_env()
+        result = subprocess.run(
+            [
+                "python3",
+                "-c",
+                "from mindex import __version__; print(__version__)",
+            ],
+            cwd="/home/andrew",
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("0.1.0", result.stdout)
 
     def test_submit_handlers_survive_current_target_clearing(self) -> None:
         node = shutil.which("node")
