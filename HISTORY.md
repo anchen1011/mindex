@@ -154,6 +154,12 @@
   meaningful Mindex-managed feature work.
 - Reinforce those defaults in the packaged skills and managed instructions so
   users do not need to explicitly request branch creation, commits, or PRs.
+- When Mindex starts work in a local project directory that is not yet a Git
+  repository, initialize one automatically so local version management is
+  available even before any GitHub workflow is configured.
+- When Mindex launches Codex for project work, default that session to YOLO
+  execution unless the user explicitly provides different approval or sandbox
+  settings for the run.
 
 ### Notes
 

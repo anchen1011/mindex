@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 
 
 def utc_now() -> str:
@@ -39,7 +39,7 @@ class TaskRecord:
             task_id=str(payload.get("task_id") or f"task-{uuid.uuid4().hex[:12]}"),
             title=str(payload.get("title", "Untitled task")),
             details=str(payload.get("details", "")),
-            status=str(payload.get("status", "pending")),
+            status=_normalize_task_status(str(payload.get("status", "queued"))),
             created_at=str(payload.get("created_at", timestamp)),
             updated_at=timestamp,
         )
@@ -79,6 +79,7 @@ class AgentRecord:
     description: str
     command_args: list[str]
     workdir: str
+    queue_id: str
     feature_branch: str
     auto_publish: bool
     status: str
@@ -89,6 +90,8 @@ class AgentRecord:
     returncode: int | None = None
     log_path: str | None = None
     last_error: str | None = None
+    current_task_id: str = ""
+    stop_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -101,6 +104,7 @@ class AgentRecord:
             description=str(payload.get("description", "")),
             command_args=[str(value) for value in payload.get("command_args", [])],
             workdir=str(payload.get("workdir", "")),
+            queue_id=str(payload.get("queue_id", "")),
             feature_branch=str(payload.get("feature_branch", "")),
             auto_publish=bool(payload.get("auto_publish", True)),
             status=str(payload.get("status", "queued")),
@@ -111,6 +115,8 @@ class AgentRecord:
             returncode=payload.get("returncode"),
             log_path=payload.get("log_path"),
             last_error=payload.get("last_error"),
+            current_task_id=str(payload.get("current_task_id", "")),
+            stop_requested=bool(payload.get("stop_requested", False)),
         )
 
 
@@ -133,11 +139,10 @@ class StateStore:
         with self._lock:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            payload = {
-                "version": STATE_VERSION,
-                "agents": payload.get("agents", []),
-                "queues": payload.get("queues", []),
-            }
+            payload = dict(payload)
+            payload["version"] = STATE_VERSION
+            payload["agents"] = payload.get("agents", [])
+            payload["queues"] = payload.get("queues", [])
             tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             os.replace(tmp_path, self.state_file)
 
@@ -172,6 +177,14 @@ class TaskQueueManager:
     def list_queues(self) -> list[QueueRecord]:
         with self._lock:
             return self._read_queues()
+
+    def get_queue(self, queue_id: str) -> QueueRecord:
+        with self._lock:
+            return _find_queue(self._read_queues(), queue_id)
+
+    def get_task(self, queue_id: str, task_id: str) -> TaskRecord:
+        with self._lock:
+            return _find_task(_find_queue(self._read_queues(), queue_id), task_id)
 
     def ensure_default_queue(self) -> QueueRecord:
         with self._lock:
@@ -236,7 +249,7 @@ class TaskQueueManager:
         *,
         title: str,
         details: str = "",
-        status: str = "pending",
+        status: str = "queued",
     ) -> TaskRecord:
         timestamp = utc_now()
         task = TaskRecord(
@@ -301,6 +314,19 @@ class TaskQueueManager:
             queue.updated_at = utc_now()
             self._write_queues(queues)
             return queue
+
+    def requeue_task_to_front(self, queue_id: str, task_id: str) -> TaskRecord:
+        with self._lock:
+            queues = self._read_queues()
+            queue = _find_queue(queues, queue_id)
+            task = _find_task(queue, task_id)
+            retained = [item for item in queue.tasks if item.task_id != task_id]
+            task.status = "queued"
+            task.updated_at = utc_now()
+            queue.tasks = [task, *retained]
+            queue.updated_at = task.updated_at
+            self._write_queues(queues)
+            return task
 
 
 class AgentManager:
@@ -368,6 +394,7 @@ class AgentManager:
         description: str,
         command_args: list[str],
         workdir: Path | str,
+        queue_id: str = "",
         feature_branch: str = "",
         auto_publish: bool = True,
     ) -> AgentRecord:
@@ -381,6 +408,7 @@ class AgentManager:
             description=description.strip(),
             command_args=command_args,
             workdir=str(resolved_workdir),
+            queue_id=queue_id.strip(),
             feature_branch=feature_branch.strip(),
             auto_publish=auto_publish,
             status="queued",
@@ -413,6 +441,16 @@ class AgentManager:
                 handle.close()
 
     def start_agent(self, agent_id: str) -> AgentRecord:
+        return self._start_agent(agent_id)
+
+    def _start_agent(
+        self,
+        agent_id: str,
+        *,
+        run_command_args: list[str] | None = None,
+        current_task_id: str | None = None,
+        on_exit: Any | None = None,
+    ) -> AgentRecord:
         with self._lock:
             agents = self._read_agents()
             for agent in agents:
@@ -433,12 +471,13 @@ class AgentManager:
                 )
                 if agent.feature_branch:
                     env["MINDEX_FEATURE_BRANCH"] = agent.feature_branch
+                effective_command_args = list(run_command_args or agent.command_args)
                 stdout_handle = log_path.open("a", encoding="utf-8")
-                stdout_handle.write(f"[{utc_now()}] starting {' '.join(agent.command_args)}\n")
+                stdout_handle.write(f"[{utc_now()}] starting {' '.join(effective_command_args)}\n")
                 stdout_handle.flush()
                 try:
                     process = subprocess.Popen(
-                        [sys.executable, "-m", "mindex", *agent.command_args],
+                        [sys.executable, "-m", "mindex", *effective_command_args],
                         cwd=agent.workdir,
                         env=env,
                         stdout=stdout_handle,
@@ -457,7 +496,16 @@ class AgentManager:
                 agent.pid = process.pid
                 agent.log_path = str(log_path)
                 agent.last_error = None
+                if current_task_id is not None:
+                    agent.current_task_id = current_task_id
+                agent.stop_requested = False
                 self._write_agents(agents)
+                if on_exit is not None:
+                    threading.Thread(
+                        target=self._wait_and_notify,
+                        args=(agent.agent_id, on_exit),
+                        daemon=True,
+                    ).start()
                 return agent
         raise KeyError(agent_id)
 
@@ -474,6 +522,8 @@ class AgentManager:
                         agent.last_error = "The server no longer controls this process."
                         self._write_agents(agents)
                     return agent
+                agent.stop_requested = True
+                self._write_agents(agents)
                 process.terminate()
                 try:
                     process.wait(timeout=wait_timeout)
@@ -495,7 +545,11 @@ class AgentManager:
             return
         agent.returncode = returncode
         agent.finished_at = utc_now()
-        agent.status = "completed" if returncode == 0 else "failed"
+        if agent.stop_requested:
+            agent.status = "queued"
+            agent.last_error = "Interrupted by operator."
+        else:
+            agent.status = "completed" if returncode == 0 else "failed"
         self._processes.pop(agent.agent_id, None)
         handle = self._log_handles.pop(agent.agent_id, None)
         if handle is not None:
@@ -514,6 +568,30 @@ class AgentManager:
         if agent is None:
             raise KeyError(agent_id)
         return agent
+
+    def clear_current_task(self, agent_id: str) -> AgentRecord:
+        with self._lock:
+            agents = self._read_agents()
+            for agent in agents:
+                if agent.agent_id != agent_id:
+                    continue
+                agent.current_task_id = ""
+                agent.stop_requested = False
+                self._write_agents(agents)
+                return agent
+        raise KeyError(agent_id)
+
+    def _wait_and_notify(self, agent_id: str, on_exit: Any) -> None:
+        while True:
+            agent = self.get_agent(agent_id)
+            if agent is None:
+                return
+            with self._lock:
+                process_active = agent_id in self._processes
+            if not process_active and agent.status != "running":
+                on_exit(agent)
+                return
+            time.sleep(0.05)
 
     def _validate_workdir(self, workdir: Path) -> None:
         if workdir == self.project_root:
@@ -537,9 +615,16 @@ def _find_task(queue: QueueRecord, task_id: str) -> TaskRecord:
 
 
 def _normalize_task_status(status: str) -> str:
-    candidate = status.strip().lower() or "pending"
-    if candidate not in {"pending", "in_progress", "done", "blocked"}:
-        raise ValueError("status must be one of: pending, in_progress, done, blocked")
+    candidate = status.strip().lower() or "queued"
+    aliases = {
+        "pending": "queued",
+        "in_progress": "running",
+        "done": "completed",
+        "complete": "completed",
+    }
+    candidate = aliases.get(candidate, candidate)
+    if candidate not in {"queued", "running", "completed", "failed", "blocked"}:
+        raise ValueError("status must be one of: queued, running, completed, failed, blocked")
     return candidate
 
 
