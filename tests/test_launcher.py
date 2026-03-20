@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from mindex.codex_home import default_managed_logs_root
-from mindex.launcher import find_project_root, launch_codex
+from mindex.launcher import default_codex_args, find_project_root, launch_codex
 
 
 class LauncherTests(unittest.TestCase):
@@ -141,6 +141,11 @@ class LauncherTests(unittest.TestCase):
 
         self.assertEqual(completed.stdout.strip(), "0.1.0")
 
+    def test_default_codex_args_adds_yolo_once(self) -> None:
+        self.assertEqual(default_codex_args([]), ["--yolo"])
+        self.assertEqual(default_codex_args(["status"]), ["--yolo", "status"])
+        self.assertEqual(default_codex_args(["--yolo", "status"]), ["--yolo", "status"])
+
     def test_launch_codex_proxies_from_repo_root_and_logs_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -179,7 +184,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
-            self.assertEqual(payload["args"], ["status", "--json"])
+            self.assertEqual(payload["args"], ["--yolo", "status", "--json"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             status_files = list(logs_root.glob("**/status.json"))
@@ -225,7 +230,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(standalone.resolve()))
-            self.assertEqual(payload["args"], [])
+            self.assertEqual(payload["args"], ["--yolo"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             self.assertFalse((standalone / "logs").exists())
@@ -282,7 +287,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["branch"], feature_branch)
-            self.assertEqual(payload["args"], ["status"])
+            self.assertEqual(payload["args"], ["--yolo", "status"])
             current_branch = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(root),
@@ -556,7 +561,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
-            self.assertEqual(payload["args"], ["fix", "bug"])
+            self.assertEqual(payload["args"], ["--yolo", "fix", "bug"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             current_branch = subprocess.run(

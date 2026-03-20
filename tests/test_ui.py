@@ -5,12 +5,14 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from mindex.cli import main as cli_main
 from mindex.task_queue import AgentManager, TaskQueueManager
-from mindex.ui import MindexUiApp, load_or_create_ui_config
+import mindex.ui as ui_module
+from mindex.ui import MindexUiApp, load_or_create_ui_config, reset_ui_config
 
 
 class UiTests(unittest.TestCase):
@@ -51,6 +53,155 @@ class UiTests(unittest.TestCase):
             self.assertIn("password_hash", written["auth"])
             self.assertIn("session_secret", written["auth"])
             self.assertFalse(bootstrap.generated_password)
+
+    def test_reset_ui_config_rewrites_existing_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            config_path = root / ".mindex" / "ui_config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "project_root": str(root),
+                        "auth": {
+                            "username": "operator",
+                            "password_hash": "old-hash",
+                            "password_salt": "deadbeef",
+                            "password_iterations": 1000,
+                            "session_secret": "legacy-session",
+                            "session_ttl_seconds": 60,
+                            "login_attempts": 1,
+                            "login_window_seconds": 30,
+                        },
+                        "server": {
+                            "host": "0.0.0.0",
+                            "port": 9999,
+                            "allow_remote": True,
+                            "allowed_origins": ["https://example.com"],
+                        },
+                        "storage": {
+                            "state_file": str(root / ".mindex" / "custom_state.json"),
+                            "queue_log_dir": str(root / ".mindex" / "custom_logs"),
+                        },
+                        "ui": {"title": "Legacy UI"},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap = reset_ui_config(project_root=root, password="new-secret")
+
+            self.assertFalse(bootstrap.generated_password)
+            self.assertEqual(bootstrap.config.username, "admin")
+            self.assertEqual(bootstrap.config.host, "127.0.0.1")
+            self.assertEqual(bootstrap.config.port, 8765)
+            self.assertEqual(bootstrap.config.title, "Mindex Control Deck")
+            self.assertFalse(bootstrap.config.allow_remote)
+            self.assertEqual(bootstrap.config.state_file, root / ".mindex" / "task_queues.json")
+            self.assertEqual(bootstrap.config.queue_log_dir, root / ".mindex" / "queue_logs")
+            app = MindexUiApp(bootstrap.config)
+            self.assertTrue(app.verify_password("new-secret"))
+            written = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["auth"]["username"], "admin")
+            self.assertNotEqual(written["auth"]["session_secret"], "legacy-session")
+            self.assertEqual(written["server"]["host"], "127.0.0.1")
+            self.assertEqual(written["storage"]["state_file"], str(root / ".mindex" / "task_queues.json"))
+
+    def test_remote_ui_config_allows_local_interface_origins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            config_path = root / ".mindex" / "ui_config.json"
+            payload = {
+                "project_root": str(root),
+                "auth": {
+                    "username": "admin",
+                    "password_hash": "hash",
+                    "password_salt": "deadbeef",
+                    "password_iterations": 1000,
+                    "session_secret": "session",
+                    "session_ttl_seconds": 60,
+                    "login_attempts": 5,
+                    "login_window_seconds": 30,
+                },
+                "server": {
+                    "host": "0.0.0.0",
+                    "port": 8765,
+                    "allow_remote": True,
+                    "allowed_origins": ["https://example.com"],
+                },
+                "storage": {
+                    "state_file": str(root / ".mindex" / "task_queues.json"),
+                    "queue_log_dir": str(root / ".mindex" / "queue_logs"),
+                },
+                "ui": {"title": "Remote UI"},
+            }
+
+            original_gethostname = ui_module.socket.gethostname
+            original_getfqdn = ui_module.socket.getfqdn
+            original_getaddrinfo = ui_module.socket.getaddrinfo
+
+            def fake_getaddrinfo(host: str, *args: object, **kwargs: object) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+                if host == "deckbox":
+                    return [(0, 0, 0, "", ("192.168.1.20", 0))]
+                if host == "deckbox.local":
+                    return [(0, 0, 0, "", ("fe80::1234%en0", 0))]
+                return []
+
+            ui_module.socket.gethostname = lambda: "deckbox"
+            ui_module.socket.getfqdn = lambda: "deckbox.local"
+            ui_module.socket.getaddrinfo = fake_getaddrinfo
+            try:
+                config = ui_module._parse_ui_config(payload, config_path)
+            finally:
+                ui_module.socket.gethostname = original_gethostname
+                ui_module.socket.getfqdn = original_getfqdn
+                ui_module.socket.getaddrinfo = original_getaddrinfo
+
+            self.assertIn("http://127.0.0.1:8765", config.allowed_origins)
+            self.assertIn("http://localhost:8765", config.allowed_origins)
+            self.assertIn("http://[::1]:8765", config.allowed_origins)
+            self.assertIn("http://deckbox:8765", config.allowed_origins)
+            self.assertIn("http://deckbox.local:8765", config.allowed_origins)
+            self.assertIn("http://192.168.1.20:8765", config.allowed_origins)
+            self.assertIn("http://[fe80::1234]:8765", config.allowed_origins)
+            self.assertIn("https://example.com", config.allowed_origins)
+
+    def test_disable_origin_checks_bypasses_origin_validation(self) -> None:
+        handler = ui_module.UiRequestHandler.__new__(ui_module.UiRequestHandler)
+        handler.command = "POST"
+        handler.headers = {"Origin": "https://public.example.net"}
+        handler.app = SimpleNamespace(
+            config=SimpleNamespace(
+                disable_origin_checks=True,
+                allowed_origins=("http://127.0.0.1:8765",),
+            )
+        )
+
+        self.assertIsNone(handler._check_origin(require_auth=True))
+
+    def test_disable_csrf_checks_bypasses_csrf_validation(self) -> None:
+        session = ui_module.SessionRecord(
+            token="session-token",
+            username="admin",
+            csrf_token="expected-token",
+            expires_at=9999999999.0,
+        )
+        handler = ui_module.UiRequestHandler.__new__(ui_module.UiRequestHandler)
+        handler.command = "POST"
+        handler.headers = {"X-Mindex-CSRF-Token": "wrong-token"}
+        handler.app = SimpleNamespace(
+            config=SimpleNamespace(
+                disable_origin_checks=True,
+                disable_csrf_checks=True,
+                allowed_origins=("http://127.0.0.1:8765",),
+            )
+        )
+        handler._session_from_cookie = lambda: session
+
+        self.assertIs(handler._require_session(require_csrf=True), session)
 
     def test_agent_manager_runs_python_module_agents_without_shelling_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -157,6 +308,97 @@ class UiTests(unittest.TestCase):
             payload = json.loads(stdout_buffer.getvalue())
             self.assertEqual(payload["project_root"], str(root.resolve()))
             self.assertEqual(payload["username"], "admin")
+            self.assertFalse(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
+
+    def test_cli_routes_ui_init_config_with_disabled_origin_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            stdout_buffer = io.StringIO()
+
+            with redirect_stdout(stdout_buffer):
+                result = cli_main(
+                    [
+                        "ui",
+                        "init-config",
+                        "--project-root",
+                        str(root),
+                        "--password",
+                        "deck-secret",
+                        "--allow-remote",
+                        "--disable-origin-checks",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertTrue(payload["allow_remote"])
+            self.assertTrue(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
+
+    def test_cli_routes_ui_init_config_with_disabled_csrf_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            stdout_buffer = io.StringIO()
+
+            with redirect_stdout(stdout_buffer):
+                result = cli_main(
+                    [
+                        "ui",
+                        "init-config",
+                        "--project-root",
+                        str(root),
+                        "--password",
+                        "deck-secret",
+                        "--allow-remote",
+                        "--disable-csrf-checks",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertTrue(payload["allow_remote"])
+            self.assertFalse(payload["disable_origin_checks"])
+            self.assertTrue(payload["disable_csrf_checks"])
+
+    def test_cli_routes_ui_reset_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            load_or_create_ui_config(
+                project_root=root,
+                username="operator",
+                password="old-secret",
+                host="localhost",
+                port=9000,
+                title="Old Deck",
+            )
+            stdout_buffer = io.StringIO()
+
+            with redirect_stdout(stdout_buffer):
+                result = cli_main(
+                    [
+                        "ui",
+                        "reset-config",
+                        "--project-root",
+                        str(root),
+                        "--password",
+                        "deck-secret",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["project_root"], str(root.resolve()))
+            self.assertEqual(payload["username"], "admin")
+            self.assertEqual(payload["host"], "127.0.0.1")
+            self.assertEqual(payload["port"], 8765)
+            self.assertFalse(payload["disable_origin_checks"])
+            self.assertFalse(payload["disable_csrf_checks"])
+            app = MindexUiApp(load_or_create_ui_config(project_root=root).config)
+            self.assertTrue(app.verify_password("deck-secret"))
 
     def test_cli_prompts_for_ui_password_when_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

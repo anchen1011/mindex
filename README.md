@@ -149,6 +149,8 @@ Current implementation:
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
   `~/.mindex/codex-home` by default
+- `mindex` also prepends Codex `--yolo` by default so routine launches inherit
+  the fully automated approval mode unless the flag is already present
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
   URL on GitHub
@@ -209,6 +211,7 @@ Mindex jobs and the coding agents launched through the wrapper.
 Current commands:
 
 - `mindex ui init-config --project-root <root>`
+- `mindex ui reset-config --project-root <root>`
 - `mindex ui serve --project-root <root>`
 
 Implemented behavior:
@@ -217,8 +220,21 @@ Implemented behavior:
   hash instead of storing a plaintext password
 - keeps the default UI username as `admin` and prompts `mindex ui init-config`
   for the password when `--password` is not supplied
+- lets `mindex ui reset-config` rewrite `.mindex/ui_config.json` from scratch
+  with fresh credentials, session secrets, and localhost-first server defaults
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
+- when remote binding is enabled, automatically allows browser origins for the
+  configured port across localhost, loopback IPv6, and discovered machine
+  hostnames/IPs while still honoring explicit `allowed_origins` entries for
+  custom aliases
+- supports an explicit `disable_origin_checks=true` server override, plus the
+  `--disable-origin-checks` CLI flag, for deployments that must accept browser
+  requests from arbitrary public origins despite the weaker CSRF posture
+- supports an explicit `disable_csrf_checks=true` server override, plus the
+  `--disable-csrf-checks` CLI flag, for deployments that must accept
+  state-changing requests without the session CSRF token despite the weaker
+  request-forgery protection
 - serves a responsive control deck for authentication, recent Mindex activity,
   agent creation, agent lifecycle controls, and session task queues
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
