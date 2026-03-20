@@ -65,6 +65,15 @@ class UiTests(unittest.TestCase):
 
         return base_url, request
 
+    def _wait_for(self, predicate, *, timeout: float = 10.0, message: str = "condition was not met"):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.05)
+        self.fail(message)
+
     def test_load_or_create_ui_config_hashes_password_and_migrates_legacy_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
@@ -189,7 +198,7 @@ class UiTests(unittest.TestCase):
 
         self.assertIs(handler._require_session(require_csrf=True), session)
 
-    def test_create_managed_session_defaults_command_args_from_name(self) -> None:
+    def test_create_managed_session_starts_a_live_session_with_a_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
             self._create_repo(root)
@@ -199,9 +208,12 @@ class UiTests(unittest.TestCase):
             managed = app.create_managed_session(name="Triage flaky tests", workdir=root)
 
             self.assertEqual(managed["name"], "Triage flaky tests")
-            self.assertEqual(managed["command_args"], ["exec", "Triage flaky tests"])
+            self.assertEqual(managed["status"], "running")
             self.assertEqual(managed["queue"]["name"], "Triage flaky tests")
-            self.assertEqual(managed["queue"]["description"], "Queue for Triage flaky tests.")
+            self.assertEqual(managed["queue"]["description"], "")
+            self.assertTrue(managed["messages"])
+            stopped = app.stop_managed_session(managed["agent_id"])
+            self.assertEqual(stopped["status"], "stopped")
 
     def test_ui_app_creates_sessions_and_reports_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -220,32 +232,33 @@ class UiTests(unittest.TestCase):
             self.assertIsNotNone(app.sessions.get(session.token))
             self.assertTrue(session.csrf_token)
 
-            managed = app.create_managed_session(
-                name="API agent",
-                command_args=["--version"],
-                workdir=root,
-                queue_description="Handle the in-process UI session queue.",
-            )
+            managed = app.create_managed_session(name="API agent", workdir=root)
             agent_id = managed["agent_id"]
             queue_id = managed["queue"]["queue_id"]
 
-            task = app.add_session_task(queue_id, title="Confirm output visibility", details="Ensure the session shows log text.")
-            completed = app.agent_manager.wait_for_agent(agent_id, timeout=10)
-            self.assertEqual(completed.status, "completed")
+            task = app.send_to_session(agent_id, text="printf 'ready\\n'", details="Ensure the session shows live output.")
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, task["task_id"]).status == "completed",
+                message="timed out waiting for the queue item to complete",
+            )
 
             payload = app.system_status()
             self.assertEqual(payload["session_count"], 1)
-            self.assertEqual(payload["running_count"], 0)
+            self.assertEqual(payload["running_count"], 1)
             self.assertTrue(payload["security"]["csrf_protected"])
             self.assertEqual(len(payload["sessions"]), 1)
             session_payload = payload["sessions"][0]
-            self.assertEqual(session_payload["status"], "stopped")
-            self.assertEqual(session_payload["agent_status"], "completed")
+            self.assertEqual(session_payload["status"], "running")
+            self.assertEqual(session_payload["agent_status"], "running")
             self.assertEqual(session_payload["agent_id"], agent_id)
             self.assertEqual(session_payload["queue"]["queue_id"], queue_id)
             self.assertEqual(session_payload["queue"]["tasks"][0]["task_id"], task["task_id"])
             self.assertEqual(session_payload["queue"]["tasks"][0]["status"], "completed")
-            self.assertIn("starting --version", session_payload["output"])
+            self.assertIn("ready", session_payload["output"])
+            self.assertEqual(session_payload["messages"][-1]["kind"], "output")
+
+            stopped = app.stop_managed_session(agent_id)
+            self.assertEqual(stopped["status"], "stopped")
 
     def test_ui_app_auto_starts_first_task_and_queues_following_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -256,48 +269,30 @@ class UiTests(unittest.TestCase):
             managed = app.create_managed_session(name="Queue worker", workdir=root)
             agent_id = managed["agent_id"]
             queue_id = managed["queue"]["queue_id"]
+            first_task = app.send_to_session(
+                agent_id,
+                text="python3 -c \"import time; print('first'); time.sleep(0.4)\"",
+            )
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status == "running",
+                message="first queue item never started running",
+            )
 
-            start_calls: list[tuple[list[str], str]] = []
+            second_task = app.send_to_session(agent_id, text="printf 'second\\n'")
+            self.assertEqual(second_task["status"], "queued")
 
-            def fake_start_agent(
-                requested_agent_id: str,
-                *,
-                run_command_args: list[str] | None = None,
-                current_task_id: str | None = None,
-                on_exit=None,
-            ):
-                agents = app.agent_manager._read_agents()
-                for stored_agent in agents:
-                    if stored_agent.agent_id != requested_agent_id:
-                        continue
-                    stored_agent.status = "running"
-                    stored_agent.current_task_id = current_task_id or ""
-                    stored_agent.returncode = None
-                    app.agent_manager._write_agents(agents)
-                    start_calls.append((list(run_command_args or []), stored_agent.current_task_id))
-                    return stored_agent
-                raise KeyError(requested_agent_id)
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, second_task["task_id"]).status == "completed",
+                message="timed out waiting for the queued follow-up item to finish",
+            )
 
-            with mock.patch.object(app.agent_manager, "_start_agent", side_effect=fake_start_agent):
-                first_task = app.add_session_task(queue_id, title="First queued task", details="Run me now")
-                second_task = app.add_session_task(queue_id, title="Second queued task", details="Run me later")
+            self.assertEqual(app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status, "completed")
+            messages = app.list_session_messages(agent_id)
+            joined_output = "".join(message["text"] for message in messages if message["kind"] == "output")
+            self.assertIn("first", joined_output)
+            self.assertIn("second", joined_output)
 
-                self.assertEqual(first_task["status"], "running")
-                self.assertEqual(second_task["status"], "queued")
-                self.assertEqual(start_calls[0][0], ["exec", "--skip-git-repo-check", "First queued task"])
-
-                agents = app.agent_manager._read_agents()
-                completed_agent = next(item for item in agents if item.agent_id == agent_id)
-                completed_agent.status = "completed"
-                completed_agent.returncode = 0
-                completed_agent.current_task_id = first_task["task_id"]
-                app.agent_manager._write_agents(agents)
-
-                app._handle_session_run_finished(completed_agent)
-
-                self.assertEqual(app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status, "completed")
-                self.assertEqual(app.task_queue_manager.get_task(queue_id, second_task["task_id"]).status, "running")
-                self.assertEqual(start_calls[1][0], ["exec", "--skip-git-repo-check", "Second queued task"])
+            app.stop_managed_session(agent_id)
 
     def test_ui_app_stop_requeues_running_task_to_front(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -309,77 +304,88 @@ class UiTests(unittest.TestCase):
             agent_id = managed["agent_id"]
             queue_id = managed["queue"]["queue_id"]
 
-            first_task = app.task_queue_manager.add_task(queue_id, title="Currently running", status="running")
-            second_task = app.task_queue_manager.add_task(queue_id, title="Queued behind", status="queued")
+            first_task = app.send_to_session(
+                agent_id,
+                text="python3 -c \"import time; print('running'); time.sleep(5)\"",
+            )
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status == "running",
+                message="running queue item never started",
+            )
+            second_task = app.send_to_session(agent_id, text="printf 'queued behind\\n'")
 
-            agents = app.agent_manager._read_agents()
-            stored_agent = next(item for item in agents if item.agent_id == agent_id)
-            stored_agent.status = "queued"
-            stored_agent.current_task_id = first_task.task_id
-            stored_agent.stop_requested = True
-            app.agent_manager._write_agents(agents)
-
-            app._handle_session_run_finished(stored_agent)
+            stopped = app.stop_managed_session(agent_id)
+            self.assertEqual(stopped["status"], "stopped")
 
             queue = app.task_queue_manager.get_queue(queue_id)
-            self.assertEqual([task.task_id for task in queue.tasks], [first_task.task_id, second_task.task_id])
+            self.assertEqual([task.task_id for task in queue.tasks], [first_task["task_id"], second_task["task_id"]])
             self.assertEqual(queue.tasks[0].status, "queued")
-            refreshed_agent = app.agent_manager.get_agent(agent_id)
-            self.assertIsNotNone(refreshed_agent)
-            self.assertEqual(refreshed_agent.current_task_id, "")
-            self.assertFalse(refreshed_agent.stop_requested)
+            refreshed_session = app.managed_session_state.get_session(agent_id)
+            self.assertIsNotNone(refreshed_session)
+            self.assertEqual(refreshed_session.current_task_id, "")
 
-    def test_ui_app_exec_tasks_bypass_git_repo_check_in_non_git_workspace(self) -> None:
+    def test_ui_app_start_resumes_from_the_front_of_the_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "repo"
             self._create_repo(root)
-            fake_codex = Path(tmpdir) / "fake-codex"
-            output_path = Path(tmpdir) / "codex-output.json"
-            fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, sys\n"
-                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
-                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, handle)\n",
-                encoding="utf-8",
-            )
-            fake_codex.chmod(0o755)
-
             bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret")
             app = MindexUiApp(bootstrap.config)
             managed = app.create_managed_session(name="Queue worker", workdir=root)
-            queue_id = managed["queue"]["queue_id"]
             agent_id = managed["agent_id"]
+            queue_id = managed["queue"]["queue_id"]
 
-            env_updates = {
-                "MINDEX_CODEX_BIN": str(fake_codex),
-                "MINDEX_DISABLE_SCRIPT": "1",
-                "MINDEX_SKIP_AUTO_PUBLISH": "1",
-                "MINDEX_FAKE_OUTPUT": str(output_path),
-            }
-            original_env = {key: os.environ.get(key) for key in env_updates}
-            try:
-                os.environ.update(env_updates)
-                task = app.add_session_task(queue_id, title="ls", details="List files")
-                completed = app.agent_manager.wait_for_agent(agent_id, timeout=10)
-                deadline = time.time() + 5
-                while time.time() < deadline:
-                    refreshed_agent = app.agent_manager.get_agent(agent_id)
-                    refreshed_task = app.task_queue_manager.get_task(queue_id, task["task_id"])
-                    if refreshed_agent is not None and refreshed_agent.current_task_id == "" and refreshed_task.status == "completed":
-                        break
-                    time.sleep(0.05)
-            finally:
-                for key, value in original_env.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+            first_task = app.send_to_session(
+                agent_id,
+                text="python3 -c \"import time; print('first resume'); time.sleep(5)\"",
+            )
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status == "running",
+                message="first queue item never started",
+            )
+            second_task = app.send_to_session(agent_id, text="printf 'second resume\\n'")
+            app.stop_managed_session(agent_id)
 
-            self.assertEqual(completed.status, "completed")
-            self.assertEqual(task["status"], "running")
-            payload = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["cwd"], str(root.resolve()))
-            self.assertEqual(payload["args"][:3], ["exec", "--skip-git-repo-check", "ls"])
+            started = app.start_managed_session(agent_id)
+            self.assertEqual(started["status"], "running")
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, second_task["task_id"]).status == "completed",
+                message="timed out waiting for the restarted session to drain the queue",
+            )
+            queue = app.task_queue_manager.get_queue(queue_id)
+            self.assertEqual([task.status for task in queue.tasks], ["completed", "completed"])
+            output = app._visible_output(agent_id)
+            self.assertIn("first resume", output)
+            self.assertIn("second resume", output)
+            app.stop_managed_session(agent_id)
+
+    def test_ui_app_rejects_reordering_or_editing_the_running_queue_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            self._create_repo(root)
+            bootstrap = load_or_create_ui_config(project_root=root, password="deck-secret")
+            app = MindexUiApp(bootstrap.config)
+            managed = app.create_managed_session(name="Queue worker", workdir=root)
+            agent_id = managed["agent_id"]
+            queue_id = managed["queue"]["queue_id"]
+
+            first_task = app.send_to_session(
+                agent_id,
+                text="python3 -c \"import time; print('protected'); time.sleep(5)\"",
+            )
+            self._wait_for(
+                lambda: app.task_queue_manager.get_task(queue_id, first_task["task_id"]).status == "running",
+                message="running queue item never started",
+            )
+            second_task = app.send_to_session(agent_id, text="printf 'queued\\n'")
+
+            with self.assertRaises(ValueError):
+                app.update_session_task(queue_id, first_task["task_id"], title="echo nope")
+            with self.assertRaises(ValueError):
+                app.delete_session_task(queue_id, first_task["task_id"])
+            with self.assertRaises(ValueError):
+                app.reorder_session_tasks(queue_id, [second_task["task_id"], first_task["task_id"]])
+
+            app.stop_managed_session(agent_id)
 
     def test_cli_routes_ui_init_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -627,7 +633,7 @@ api = async (path, options) => {{
   if (path === '/api/sessions') {{
     sessionEvent.currentTarget = null;
   }}
-  if (path === '/api/queues/queue-1/tasks') {{
+  if (path === '/api/sessions/session-1/send') {{
     taskEvent.currentTarget = null;
   }}
   return {{}};
@@ -645,7 +651,7 @@ const sessionForm = {{
 }};
 
 const taskForm = {{
-  dataset: {{ taskForm: 'queue-1' }},
+  dataset: {{ taskForm: 'queue-1', sessionId: 'session-1' }},
   values: {{ title: 'Check output', details: 'Look at errors', status: 'pending' }},
   resetCount: 0,
   reset() {{
@@ -680,6 +686,12 @@ const taskEvent = {{
   }}
   if (apiCalls.length !== 2) {{
     throw new Error(`api calls: ${{apiCalls.length}}`);
+  }}
+  if (apiCalls[1].path !== '/api/sessions/session-1/send') {{
+    throw new Error(`task path: ${{apiCalls[1].path}}`);
+  }}
+  if (apiCalls[1].body.text !== 'Check output') {{
+    throw new Error(`task text: ${{apiCalls[1].body.text}}`);
   }}
 }})().catch(error => {{
   console.error(error.stack || String(error));
@@ -874,42 +886,52 @@ api = async () => {{
                 create_status, create_payload = request(
                     "/api/sessions",
                     method="POST",
-                    payload={"name": "API session", "workdir": str(root), "command_args": "--version"},
+                    payload={"name": "API session", "workdir": str(root)},
                     headers=auth_headers,
                 )
                 self.assertEqual(create_status, 201)
                 session = create_payload["session"]
                 session_id = session["agent_id"]
                 queue_id = session["queue"]["queue_id"]
+                self.assertEqual(session["status"], "running")
 
                 first_status, first_payload = request(
-                    f"/api/queues/{queue_id}/tasks",
+                    f"/api/sessions/{session_id}/send",
                     method="POST",
-                    payload={"title": "Check output", "details": "Look for start logs"},
+                    payload={"text": "python3 -c \"import time; print('first live'); time.sleep(0.4)\"", "details": "Look for start logs"},
                     headers=auth_headers,
                 )
                 self.assertEqual(first_status, 201)
                 first_task_id = first_payload["task"]["task_id"]
-                self.assertIn(first_payload["task"]["status"], {"running", "completed"})
+                self.assertEqual(first_payload["task"]["status"], "running")
 
                 second_status, second_payload = request(
-                    f"/api/queues/{queue_id}/tasks",
+                    f"/api/sessions/{session_id}/send",
                     method="POST",
-                    payload={"title": "Reorder me", "details": "Promote this first"},
+                    payload={"text": "printf 'second live\\n'", "details": "Promote this first"},
                     headers=auth_headers,
                 )
                 self.assertEqual(second_status, 201)
                 second_task_id = second_payload["task"]["task_id"]
-                self.assertIn(second_payload["task"]["status"], {"queued", "running", "completed"})
+                self.assertEqual(second_payload["task"]["status"], "queued")
+
+                stop_for_reorder_status, stop_for_reorder_payload = request(
+                    f"/api/sessions/{session_id}/stop",
+                    method="POST",
+                    payload={},
+                    headers=auth_headers,
+                )
+                self.assertEqual(stop_for_reorder_status, 200)
+                self.assertEqual(stop_for_reorder_payload["session"]["status"], "stopped")
 
                 edit_status, edit_payload = request(
                     f"/api/queues/{queue_id}/tasks/{second_task_id}",
                     method="PATCH",
-                    payload={"title": "Reorder me first", "details": "Now in progress"},
+                    payload={"title": "printf 'second live edited\\n'", "details": "Now in progress"},
                     headers=auth_headers,
                 )
                 self.assertEqual(edit_status, 200)
-                self.assertEqual(edit_payload["task"]["title"], "Reorder me first")
+                self.assertEqual(edit_payload["task"]["title"], "printf 'second live edited\\n'")
 
                 reorder_status, reorder_payload = request(
                     f"/api/queues/{queue_id}/reorder",
@@ -923,20 +945,30 @@ api = async () => {{
                     [second_task_id, first_task_id],
                 )
 
+                restart_status, restart_payload = request(
+                    f"/api/sessions/{session_id}/start",
+                    method="POST",
+                    payload={},
+                    headers=auth_headers,
+                )
+                self.assertEqual(restart_status, 200)
+                self.assertEqual(restart_payload["session"]["status"], "running")
+
                 deadline = time.time() + 10
                 while True:
                     status_status, status_payload = request("/api/status", headers={"Origin": base_url})
                     self.assertEqual(status_status, 200)
                     live_session = next(item for item in status_payload["sessions"] if item["agent_id"] == session_id)
                     active_task_statuses = {task["status"] for task in live_session["queue"]["tasks"]}
-                    if live_session["status"] != "running" and active_task_statuses.isdisjoint({"queued", "running"}):
+                    if active_task_statuses.isdisjoint({"queued", "running"}):
                         break
                     self.assertLess(time.time(), deadline, "timed out waiting for the managed session to finish")
                     time.sleep(0.1)
 
-                self.assertEqual(live_session["status"], "stopped")
-                self.assertEqual(live_session["agent_status"], "completed")
-                self.assertIn("starting --version", live_session["output"])
+                self.assertEqual(live_session["status"], "running")
+                self.assertEqual(live_session["agent_status"], "running")
+                self.assertIn("first live", live_session["output"])
+                self.assertIn("second live edited", live_session["output"])
                 self.assertEqual(
                     [task["task_id"] for task in live_session["queue"]["tasks"]],
                     [second_task_id, first_task_id],
@@ -953,6 +985,22 @@ api = async () => {{
                 )
                 self.assertEqual(delete_task_status, 200)
                 self.assertTrue(delete_task_payload["ok"])
+
+                messages_status, messages_payload = request(
+                    f"/api/sessions/{session_id}/messages",
+                    headers={"Origin": base_url},
+                )
+                self.assertEqual(messages_status, 200)
+                self.assertGreaterEqual(len(messages_payload["messages"]), 3)
+
+                stop_session_status, stop_session_payload = request(
+                    f"/api/sessions/{session_id}/stop",
+                    method="POST",
+                    payload={},
+                    headers=auth_headers,
+                )
+                self.assertEqual(stop_session_status, 200)
+                self.assertEqual(stop_session_payload["session"]["status"], "stopped")
 
                 delete_session_status, delete_session_payload = request(
                     f"/api/sessions/{session_id}",
@@ -993,7 +1041,7 @@ api = async () => {{
                 create_status, create_payload = request(
                     "/api/sessions",
                     method="POST",
-                    payload={"name": "Remote session", "workdir": str(root), "command_args": "--version"},
+                    payload={"name": "Remote session", "workdir": str(root)},
                     headers={
                         "Origin": "https://public.example.net",
                         "X-Mindex-CSRF-Token": f"wrong-{csrf_token}",

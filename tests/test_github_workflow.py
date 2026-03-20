@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from mindex.github_workflow import ensure_feature_branch, publish_pull_request
+from mindex.github_workflow import ensure_feature_branch, get_current_branch, initialize_local_git_repository, publish_pull_request
 
 
 class GitHubWorkflowTests(unittest.TestCase):
@@ -101,6 +101,18 @@ class GitHubWorkflowTests(unittest.TestCase):
             encoding="utf-8",
         )
         script_path.chmod(0o755)
+
+    def test_initialize_local_git_repository_creates_main_branch_without_commits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            root.mkdir()
+
+            result = initialize_local_git_repository(root)
+
+            self.assertTrue(result.initialized)
+            self.assertEqual(result.branch_name, "main")
+            self.assertTrue((root / ".git").is_dir())
+            self.assertEqual(get_current_branch(root), "main")
 
     def test_publish_pull_request_creates_branch_push_and_verified_pr(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -26,8 +26,8 @@ There are two simple setup paths:
    validation results under `logs/` for better observability.
 3. **Automatic commits and PRs:** Mindex defaults to feature-branch
    publication so changes are easier to trace, review, and control.
-4. **Queue management UI:** Mindex includes a local UI for managing task
-   queues and coding agents with better visibility across workflows.
+4. **Live session queue UI:** Mindex includes a local UI for managing simple
+   live sessions, per-session queues, and visible transcripts.
 
 Next, we will keep improving the Harness with a strong focus on **security**,
 **testing**, and **memory**.
@@ -40,7 +40,8 @@ The repository currently includes:
 - structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
-- a secure local web UI for managing Mindex jobs and coding agents
+- a secure local web UI for managing live sessions, queue order, and session
+  transcripts
 
 The repository now has an initial implementation for the core runtime features
 below, with additional hardening and integration work still in progress.
@@ -149,6 +150,12 @@ Current implementation:
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
   `~/.mindex/codex-home` by default
+- `mindex` also defaults Codex launches into YOLO mode by prepending
+  `--dangerously-bypass-approvals-and-sandbox` unless the user already
+  supplied explicit approval or sandbox flags for that run
+- when `mindex` starts inside a project directory that is not yet a Git
+  repository, it initializes a local Git repository first so branch-based
+  local version management is available even before any GitHub remote exists
 - `mindex publish-pr ...` creates a safe feature branch when needed, commits
   the current work, pushes it, creates the pull request, and verifies the PR
   URL on GitHub
@@ -204,7 +211,7 @@ Implemented behavior:
 ### 6. Secure web UI
 
 Mindex now includes a browser-accessible control surface for managing queued
-Mindex jobs and the coding agents launched through the wrapper.
+live session queues and their visible transcripts.
 
 Current commands:
 
@@ -219,10 +226,10 @@ Implemented behavior:
 - defaults the server to `127.0.0.1` and requires an explicit
   `allow_remote=true` config choice before binding to non-localhost interfaces
 - serves a simpler session-first browser view where each session owns one
-  editable queue, supports drag-to-reorder queue items, and shows its visible
-  output inline
-- lets a new session be created from just its name and workdir, defaulting the
-  underlying Mindex prompt and queue description automatically
+  editable queue, supports drag-to-reorder queue items, and shows its
+  transcript inline
+- lets a new session be created from just its name and workdir, immediately
+  starting a live shell-backed session for that workspace
 - stores opaque session cookies in-memory, uses CSRF tokens for state-changing
   requests, and rate-limits repeated login failures
 - supports explicit `--disable-origin-checks` and `--disable-csrf-checks`
@@ -232,22 +239,24 @@ Implemented behavior:
   packaged `mindex/*.py` UI code plus `.mindex/ui_config.json`, restarts the
   child server on changes, and disables origin/CSRF checks in that dev child
   without permanently rewriting the saved UI config
-- persists session queue state under `.mindex/task_queues.json`, including
-  queue names, queue descriptions, and ordered task lists per managed session
+- persists session queue state and transcript messages under
+  `.mindex/task_queues.json`, including queue names, ordered task lists, and
+  per-session message history
 - lets users add, edit, delete, and drag-to-reorder tasks inside each
   session-owned queue so upcoming work can be reprioritized directly in the
   browser, and automatically drives those tasks through `queued`, `running`,
   `completed`, or `failed` execution states instead of relying on manual task
   status entry; stopping a session interrupts the active task and returns it to
   the front of the queue so the next start resumes from that item
+- exposes the session transcript through the browser and through
+  `/api/sessions/<id>/messages`, while queue submissions can use
+  `/api/sessions/<id>/send` so a session behaves more like a persistent
+  conversation than a one-process-per-task launcher
 - presents each session itself as either `running` or `stopped`, and visually
   highlights the front queue item when it is the active running task
-- keeps agent workdirs constrained to the configured project root and launches
-  agents as `python -m mindex ...` without going through a shell; queued
-  `exec` tasks automatically add `--skip-git-repo-check` so session-managed
-  work can still run inside non-git workspaces that Mindex explicitly manages
-- persists agent state under `.mindex/task_queues.json` and writes per-agent
-  output under `.mindex/queue_logs/`
+- keeps session workdirs constrained to the configured project root, preserves
+  one live shell per running session, and drains queued commands inside that
+  same session instead of launching a fresh subprocess per queue item
 - migrates legacy `.mindex/ui_config.json` files that still contain a plaintext
   password and rewrites them into the secure hash-based format
 

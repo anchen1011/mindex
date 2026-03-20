@@ -12,6 +12,7 @@ from mindex.logging_utils import append_action, create_log_run, slugify, utc_tim
 
 
 PROTECTED_BRANCHES = {"main", "master", "production"}
+DEFAULT_LOCAL_BRANCH = "main"
 
 
 class WorkflowError(RuntimeError):
@@ -79,6 +80,13 @@ class PublishResult:
         return json.dumps(payload, indent=2, sort_keys=True)
 
 
+@dataclass(frozen=True)
+class LocalRepositoryInitResult:
+    initialized: bool
+    branch_name: str | None = None
+    skipped_reason: str | None = None
+
+
 def _run_command(
     command: list[str],
     *,
@@ -132,6 +140,14 @@ def _is_git_repository(project_root: Path, *, env: dict[str, str] | None = None)
     return completed.returncode == 0 and completed.stdout.strip() == "true"
 
 
+def _branch_head(project_root: Path, *, env: dict[str, str] | None = None, log_run=None) -> str | None:
+    completed = _git(project_root, "symbolic-ref", "--quiet", "--short", "HEAD", env=env, log_run=log_run, check=False)
+    if completed.returncode != 0:
+        return None
+    branch_name = completed.stdout.strip()
+    return branch_name or None
+
+
 def _git_branch_exists(project_root: Path, branch_name: str, *, env: dict[str, str] | None = None) -> bool:
     completed = _git(project_root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}", env=env, check=False)
     return completed.returncode == 0
@@ -165,6 +181,60 @@ def _compare_ref(project_root: Path, base_branch: str, *, env: dict[str, str] | 
 def _build_branch_name(summary: str) -> str:
     cleaned = slugify(summary)[:48] or "change"
     return f"mindex/{cleaned}"
+
+
+def initialize_local_git_repository(
+    project_root: Path | str,
+    *,
+    env: dict[str, str] | None = None,
+    log_run=None,
+) -> LocalRepositoryInitResult:
+    resolved_root = Path(project_root).resolve()
+    merged_env = env or {}
+    auto_init = merged_env.get("MINDEX_AUTO_INIT_GIT", "1").strip().lower()
+    if auto_init in {"0", "false", "no", "off"}:
+        return LocalRepositoryInitResult(initialized=False, skipped_reason="disabled-by-env")
+
+    if _is_git_repository(resolved_root, env=env):
+        return LocalRepositoryInitResult(initialized=False)
+
+    home_root = Path.home().resolve()
+    if resolved_root == home_root or resolved_root.parent == resolved_root:
+        return LocalRepositoryInitResult(initialized=False, skipped_reason="unsafe-project-root")
+
+    init_completed = _git(
+        resolved_root,
+        "init",
+        "-b",
+        DEFAULT_LOCAL_BRANCH,
+        env=env,
+        log_run=log_run,
+        check=False,
+    )
+    if init_completed.returncode != 0:
+        fallback_completed = _git(resolved_root, "init", env=env, log_run=log_run, check=False)
+        if fallback_completed.returncode != 0:
+            message = fallback_completed.stderr.strip() or fallback_completed.stdout.strip() or "git init failed"
+            raise WorkflowError(f"Unable to initialize a local Git repository: {message}")
+        branch_completed = _git(
+            resolved_root,
+            "symbolic-ref",
+            "HEAD",
+            f"refs/heads/{DEFAULT_LOCAL_BRANCH}",
+            env=env,
+            log_run=log_run,
+            check=False,
+        )
+        if branch_completed.returncode != 0:
+            message = branch_completed.stderr.strip() or branch_completed.stdout.strip() or "unable to set HEAD"
+            raise WorkflowError(f"Initialized a local Git repository, but could not set the default branch: {message}")
+
+    if log_run is not None:
+        append_action(
+            log_run,
+            f"Initialized a local Git repository at {resolved_root} with default branch {DEFAULT_LOCAL_BRANCH}.",
+        )
+    return LocalRepositoryInitResult(initialized=True, branch_name=DEFAULT_LOCAL_BRANCH)
 
 
 def _multi_agent_context(env: dict[str, str] | None = None) -> AgentCoordinationContext:
@@ -380,7 +450,17 @@ def default_pr_body(
 
 
 def get_current_branch(project_root: Path, *, env: dict[str, str] | None = None, log_run=None) -> str:
-    return _git(project_root, "rev-parse", "--abbrev-ref", "HEAD", env=env, log_run=log_run).stdout.strip()
+    completed = _git(project_root, "rev-parse", "--abbrev-ref", "HEAD", env=env, log_run=log_run, check=False)
+    branch_name = completed.stdout.strip()
+    if completed.returncode == 0 and branch_name and branch_name != "HEAD":
+        return branch_name
+
+    symbolic_branch = _branch_head(project_root, env=env, log_run=log_run)
+    if symbolic_branch:
+        return symbolic_branch
+
+    message = completed.stderr.strip() or completed.stdout.strip() or "unable to determine the current branch"
+    raise WorkflowError(message)
 
 
 def get_repository_context(

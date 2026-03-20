@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 
 
 def utc_now() -> str:
@@ -139,11 +139,10 @@ class StateStore:
         with self._lock:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            payload = {
-                "version": STATE_VERSION,
-                "agents": payload.get("agents", []),
-                "queues": payload.get("queues", []),
-            }
+            payload = dict(payload)
+            payload["version"] = STATE_VERSION
+            payload["agents"] = payload.get("agents", [])
+            payload["queues"] = payload.get("queues", [])
             tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             os.replace(tmp_path, self.state_file)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -19,9 +19,11 @@ import threading
 import time
 from typing import Any, Iterable
 from urllib.parse import urlparse
+import uuid
 
+from mindex.github_workflow import get_current_branch
 from mindex.launcher import find_project_root
-from mindex.task_queue import AgentManager, AgentRecord, QueueRecord, StateStore, TaskQueueManager, TaskRecord
+from mindex.task_queue import AgentManager, AgentRecord, QueueRecord, StateStore, TaskQueueManager, TaskRecord, utc_now
 
 
 MAX_REQUEST_BYTES = 65536
@@ -32,6 +34,8 @@ PASSWORD_ITERATIONS = 390000
 COOKIE_NAME = "mindex_session"
 DEV_OVERRIDE_ENV = "MINDEX_UI_EPHEMERAL_OVERRIDES"
 DEFAULT_DEV_POLL_SECONDS = 0.5
+SESSION_DONE_PREFIX = "__MINDEX_TASK_DONE__"
+DEFAULT_SESSION_COMMAND = ("/bin/bash", "--noprofile", "--norc")
 
 
 @dataclass(frozen=True)
@@ -363,6 +367,239 @@ class SessionStore:
             self._sessions.pop(token, None)
 
 
+@dataclass
+class ManagedSessionRecord:
+    agent_id: str
+    name: str
+    workdir: str
+    queue_id: str
+    status: str
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    stopped_at: str | None = None
+    current_task_id: str = ""
+    last_error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ManagedSessionRecord":
+        timestamp = str(payload.get("updated_at") or payload.get("created_at") or utc_now())
+        status = str(payload.get("status", "stopped")).strip().lower() or "stopped"
+        if status not in {"running", "stopped"}:
+            status = "stopped"
+        return cls(
+            agent_id=str(payload.get("agent_id") or f"session-{uuid.uuid4().hex[:12]}"),
+            name=str(payload.get("name", "Untitled session")),
+            workdir=str(payload.get("workdir", "")),
+            queue_id=str(payload.get("queue_id", "")),
+            status=status,
+            created_at=str(payload.get("created_at", timestamp)),
+            updated_at=timestamp,
+            started_at=payload.get("started_at"),
+            stopped_at=payload.get("stopped_at"),
+            current_task_id=str(payload.get("current_task_id", "")),
+            last_error=payload.get("last_error"),
+        )
+
+
+@dataclass
+class SessionMessageRecord:
+    message_id: str
+    agent_id: str
+    task_id: str
+    kind: str
+    text: str
+    created_at: str
+    updated_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any], *, agent_id: str) -> "SessionMessageRecord":
+        timestamp = str(payload.get("updated_at") or payload.get("created_at") or utc_now())
+        kind = str(payload.get("kind", "output")).strip().lower() or "output"
+        if kind not in {"input", "output", "system", "error"}:
+            kind = "output"
+        return cls(
+            message_id=str(payload.get("message_id") or f"message-{uuid.uuid4().hex[:12]}"),
+            agent_id=agent_id,
+            task_id=str(payload.get("task_id", "")),
+            kind=kind,
+            text=str(payload.get("text", "")),
+            created_at=str(payload.get("created_at", timestamp)),
+            updated_at=timestamp,
+        )
+
+
+class ManagedSessionState:
+    def __init__(self, store: StateStore) -> None:
+        self.store = store
+        self._lock = threading.RLock()
+        self._recover()
+
+    def _load_state(self) -> dict[str, Any]:
+        payload = self.store.load()
+        payload.setdefault("managed_sessions", [])
+        payload.setdefault("session_messages", {})
+        return payload
+
+    def _write_state(
+        self,
+        payload: dict[str, Any],
+        *,
+        sessions: list[ManagedSessionRecord] | None = None,
+        messages: dict[str, list[SessionMessageRecord]] | None = None,
+    ) -> None:
+        if sessions is not None:
+            payload["managed_sessions"] = [session.to_dict() for session in sessions]
+        if messages is not None:
+            payload["session_messages"] = {
+                agent_id: [message.to_dict() for message in items]
+                for agent_id, items in messages.items()
+            }
+        self.store.save(payload)
+
+    def _read_sessions(self) -> list[ManagedSessionRecord]:
+        payload = self._load_state()
+        return [ManagedSessionRecord.from_dict(item) for item in payload.get("managed_sessions", [])]
+
+    def _read_messages(self) -> dict[str, list[SessionMessageRecord]]:
+        payload = self._load_state()
+        raw = payload.get("session_messages", {})
+        if not isinstance(raw, dict):
+            return {}
+        messages: dict[str, list[SessionMessageRecord]] = {}
+        for agent_id, items in raw.items():
+            if not isinstance(items, list):
+                continue
+            messages[str(agent_id)] = [SessionMessageRecord.from_dict(item, agent_id=str(agent_id)) for item in items]
+        return messages
+
+    def _recover(self) -> None:
+        with self._lock:
+            payload = self._load_state()
+            sessions = [ManagedSessionRecord.from_dict(item) for item in payload.get("managed_sessions", [])]
+            changed = False
+            for session in sessions:
+                if session.status != "running":
+                    continue
+                session.status = "stopped"
+                session.last_error = "The UI restarted and detached from this live session."
+                session.stopped_at = utc_now()
+                session.updated_at = session.stopped_at
+                changed = True
+            if changed:
+                self._write_state(payload, sessions=sessions)
+
+    def list_sessions(self) -> list[ManagedSessionRecord]:
+        with self._lock:
+            return self._read_sessions()
+
+    def get_session(self, agent_id: str) -> ManagedSessionRecord | None:
+        with self._lock:
+            for session in self._read_sessions():
+                if session.agent_id == agent_id:
+                    return session
+        return None
+
+    def create_session(self, *, name: str, workdir: str, queue_id: str) -> ManagedSessionRecord:
+        timestamp = utc_now()
+        session = ManagedSessionRecord(
+            agent_id=f"session-{uuid.uuid4().hex[:12]}",
+            name=name.strip() or "Untitled session",
+            workdir=workdir,
+            queue_id=queue_id,
+            status="stopped",
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        with self._lock:
+            payload = self._load_state()
+            sessions = [ManagedSessionRecord.from_dict(item) for item in payload.get("managed_sessions", [])]
+            sessions.append(session)
+            self._write_state(payload, sessions=sessions)
+        return session
+
+    def update_session(self, agent_id: str, **updates: Any) -> ManagedSessionRecord:
+        with self._lock:
+            payload = self._load_state()
+            sessions = [ManagedSessionRecord.from_dict(item) for item in payload.get("managed_sessions", [])]
+            for session in sessions:
+                if session.agent_id != agent_id:
+                    continue
+                for key, value in updates.items():
+                    if not hasattr(session, key):
+                        continue
+                    setattr(session, key, value)
+                session.updated_at = utc_now()
+                self._write_state(payload, sessions=sessions)
+                return session
+        raise KeyError(agent_id)
+
+    def delete_session(self, agent_id: str) -> None:
+        with self._lock:
+            payload = self._load_state()
+            sessions = [ManagedSessionRecord.from_dict(item) for item in payload.get("managed_sessions", [])]
+            retained = [session for session in sessions if session.agent_id != agent_id]
+            if len(retained) == len(sessions):
+                raise KeyError(agent_id)
+            messages = self._read_messages()
+            messages.pop(agent_id, None)
+            self._write_state(payload, sessions=retained, messages=messages)
+
+    def list_messages(self, agent_id: str) -> list[SessionMessageRecord]:
+        with self._lock:
+            return list(self._read_messages().get(agent_id, []))
+
+    def append_message(
+        self,
+        agent_id: str,
+        *,
+        kind: str,
+        text: str,
+        task_id: str = "",
+        merge_output: bool = False,
+    ) -> SessionMessageRecord:
+        timestamp = utc_now()
+        with self._lock:
+            payload = self._load_state()
+            messages = self._read_messages()
+            session_messages = messages.setdefault(agent_id, [])
+            if merge_output and session_messages:
+                previous = session_messages[-1]
+                if previous.kind == kind and previous.task_id == task_id:
+                    previous.text += text
+                    previous.updated_at = timestamp
+                    self._write_state(payload, messages=messages)
+                    return previous
+            message = SessionMessageRecord(
+                message_id=f"message-{uuid.uuid4().hex[:12]}",
+                agent_id=agent_id,
+                task_id=task_id,
+                kind=kind,
+                text=text,
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            session_messages.append(message)
+            self._write_state(payload, messages=messages)
+            return message
+
+
+@dataclass
+class SessionRuntime:
+    process: subprocess.Popen[str]
+    reader_thread: threading.Thread
+    stdin_lock: threading.Lock = field(default_factory=threading.Lock)
+    current_task_id: str = ""
+    current_marker: str = ""
+    stop_requested: bool = False
+
+
 class MindexUiApp:
     def __init__(self, config: UiConfig) -> None:
         self.config = config
@@ -374,6 +611,20 @@ class MindexUiApp:
             window_seconds=config.login_window_seconds,
         )
         self.sessions = SessionStore(ttl_seconds=config.session_ttl_seconds)
+        self.managed_session_state = ManagedSessionState(self.store)
+        self._runtime_lock = threading.RLock()
+        self._runtimes: dict[str, SessionRuntime] = {}
+        self._recover_detached_session_tasks()
+
+    def _recover_detached_session_tasks(self) -> None:
+        for session in self.managed_session_state.list_sessions():
+            if not session.current_task_id or not session.queue_id:
+                continue
+            try:
+                self.task_queue_manager.requeue_task_to_front(session.queue_id, session.current_task_id)
+            except KeyError:
+                pass
+            self.managed_session_state.update_session(session.agent_id, current_task_id="")
 
     def verify_password(self, password: str) -> bool:
         salt = bytes.fromhex(self.config.password_salt)
@@ -383,185 +634,405 @@ class MindexUiApp:
     def create_session(self) -> SessionRecord:
         return self.sessions.create(self.config.username)
 
+    def _validate_session_workdir(self, workdir: Path | str) -> Path:
+        resolved_workdir = Path(workdir).resolve()
+        if resolved_workdir == self.config.project_root:
+            return resolved_workdir
+        if self.config.project_root not in resolved_workdir.parents:
+            raise ValueError("workdir must stay within the configured project root")
+        return resolved_workdir
+
     def create_managed_session(
         self,
         *,
         name: str,
-        command_args: list[str] | None = None,
         workdir: Path | str,
-        queue_description: str = "",
     ) -> dict[str, Any]:
         session_name = name.strip() or "Untitled session"
-        resolved_command_args = command_args or ["exec", session_name]
-        queue = self.task_queue_manager.create_queue(
+        resolved_workdir = self._validate_session_workdir(workdir)
+        queue = self.task_queue_manager.create_queue(name=session_name)
+        session = self.managed_session_state.create_session(
             name=session_name,
-            description=queue_description or f"Queue for {session_name}.",
+            workdir=str(resolved_workdir),
+            queue_id=queue.queue_id,
         )
         try:
-            agent = self.agent_manager.create_agent(
-                name=session_name,
-                description=queue_description,
-                command_args=resolved_command_args,
-                workdir=workdir,
-                queue_id=queue.queue_id,
-            )
+            session = self._start_session_runtime(session.agent_id)
         except Exception:
+            self.managed_session_state.delete_session(session.agent_id)
             self.task_queue_manager.delete_queue(queue.queue_id)
             raise
-        return self._session_payload(agent, queue)
+        return self._session_payload(session, queue)
 
-    def _agent_for_queue(self, queue_id: str) -> AgentRecord | None:
-        for agent in self.agent_manager.list_agents():
-            if agent.queue_id == queue_id:
-                return agent
+    def _session_for_queue(self, queue_id: str) -> ManagedSessionRecord | None:
+        for session in self.managed_session_state.list_sessions():
+            if session.queue_id == queue_id:
+                return session
         return None
 
-    def _task_command_args(self, agent: AgentRecord, task: TaskRecord) -> list[str]:
-        if any("{task}" in argument for argument in agent.command_args):
-            return self._normalize_exec_task_args([argument.replace("{task}", task.title) for argument in agent.command_args])
-        if agent.command_args[:1] == ["exec"]:
-            if len(agent.command_args) == 1:
-                return self._normalize_exec_task_args([*agent.command_args, task.title])
-            if len(agent.command_args) == 2 and agent.command_args[1] == agent.name:
-                return self._normalize_exec_task_args(["exec", task.title])
-        return self._normalize_exec_task_args(list(agent.command_args))
+    def _runtime_for_session(self, agent_id: str) -> SessionRuntime | None:
+        with self._runtime_lock:
+            return self._runtimes.get(agent_id)
 
-    def _normalize_exec_task_args(self, command_args: list[str]) -> list[str]:
-        if command_args[:1] != ["exec"]:
-            return command_args
-        if "--skip-git-repo-check" in command_args[1:]:
-            return command_args
-        return ["exec", "--skip-git-repo-check", *command_args[1:]]
+    def _build_runtime_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env.setdefault("TERM", "dumb")
+        env["MINDEX_UI_SESSION"] = "1"
+        return env
 
-    def _handle_session_run_finished(self, agent: AgentRecord) -> None:
-        if agent.current_task_id and agent.queue_id:
+    def _start_session_runtime(self, agent_id: str) -> ManagedSessionRecord:
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
+            raise KeyError(agent_id)
+        runtime = self._runtime_for_session(agent_id)
+        if runtime is not None and runtime.process.poll() is None:
+            return self.managed_session_state.update_session(
+                agent_id,
+                status="running",
+                started_at=session.started_at or utc_now(),
+                stopped_at=None,
+                last_error=None,
+            )
+        process = subprocess.Popen(
+            list(DEFAULT_SESSION_COMMAND),
+            cwd=session.workdir,
+            env=self._build_runtime_env(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        reader_thread = threading.Thread(target=self._reader_loop, args=(agent_id,), daemon=True)
+        runtime = SessionRuntime(process=process, reader_thread=reader_thread)
+        with self._runtime_lock:
+            self._runtimes[agent_id] = runtime
+        session = self.managed_session_state.update_session(
+            agent_id,
+            status="running",
+            started_at=utc_now(),
+            stopped_at=None,
+            last_error=None,
+        )
+        self.managed_session_state.append_message(
+            agent_id,
+            kind="system",
+            text=f"Session started in {session.workdir}.\n",
+            merge_output=True,
+        )
+        reader_thread.start()
+        self._start_next_queued_task(agent_id)
+        return session
+
+    def _reader_loop(self, agent_id: str) -> None:
+        runtime = self._runtime_for_session(agent_id)
+        if runtime is None or runtime.process.stdout is None:
+            return
+        try:
+            for chunk in runtime.process.stdout:
+                active_runtime = self._runtime_for_session(agent_id)
+                if active_runtime is None:
+                    break
+                stripped = chunk.strip()
+                marker_prefix = f"{SESSION_DONE_PREFIX} "
+                if stripped.startswith(marker_prefix):
+                    parts = stripped.split()
+                    if len(parts) >= 3 and parts[1] == active_runtime.current_marker:
+                        try:
+                            returncode = int(parts[2])
+                        except ValueError:
+                            returncode = 1
+                        self._handle_task_finished(agent_id, active_runtime.current_task_id, returncode)
+                        continue
+                kind = "output" if active_runtime.current_task_id else "system"
+                task_id = active_runtime.current_task_id
+                self.managed_session_state.append_message(
+                    agent_id,
+                    kind=kind,
+                    text=chunk,
+                    task_id=task_id,
+                    merge_output=True,
+                )
+        finally:
+            returncode = runtime.process.wait()
+            self._handle_runtime_exit(agent_id, returncode)
+
+    def _handle_runtime_exit(self, agent_id: str, returncode: int) -> None:
+        with self._runtime_lock:
+            runtime = self._runtimes.get(agent_id)
+            if runtime is None:
+                return
+            self._runtimes.pop(agent_id, None)
+        if runtime.process.stdin is not None:
+            runtime.process.stdin.close()
+        if runtime.process.stdout is not None:
+            runtime.process.stdout.close()
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
+            return
+        current_task_id = runtime.current_task_id or session.current_task_id
+        session = self.managed_session_state.update_session(
+            agent_id,
+            status="stopped",
+            current_task_id="",
+            stopped_at=utc_now(),
+            last_error=None if runtime.stop_requested or returncode == 0 else f"Session exited with status {returncode}.",
+        )
+        if current_task_id and session.queue_id:
             try:
-                if agent.stop_requested:
-                    self.task_queue_manager.requeue_task_to_front(agent.queue_id, agent.current_task_id)
+                if runtime.stop_requested:
+                    self.task_queue_manager.requeue_task_to_front(session.queue_id, current_task_id)
                 else:
-                    final_status = "completed" if agent.status == "completed" else "failed"
-                    self.task_queue_manager.update_task(agent.queue_id, agent.current_task_id, status=final_status)
+                    self.task_queue_manager.update_task(session.queue_id, current_task_id, status="failed")
             except KeyError:
                 pass
-        try:
-            self.agent_manager.clear_current_task(agent.agent_id)
-        except KeyError:
-            return
-        if agent.stop_requested:
-            return
-        self._start_next_queued_task(agent.agent_id)
+        note = "Session stopped.\n" if runtime.stop_requested else f"Session exited with status {returncode}.\n"
+        self.managed_session_state.append_message(
+            agent_id,
+            kind="system" if runtime.stop_requested else "error",
+            text=note,
+            merge_output=True,
+        )
+
+    def _task_input_text(self, task: TaskRecord) -> str:
+        if task.details.strip():
+            return f"{task.title}\n\n{task.details.strip()}"
+        return task.title
+
+    def _command_chunk(self, command_text: str, marker: str) -> str:
+        return (
+            f"{command_text}\n"
+            "__mindex_status=$?\n"
+            f"printf '\\n{SESSION_DONE_PREFIX} {marker} %s\\n' \"$__mindex_status\"\n"
+        )
 
     def _start_next_queued_task(self, agent_id: str) -> dict[str, Any] | None:
-        agent = self.agent_manager.get_agent(agent_id)
-        if agent is None or agent.status == "running" or not agent.queue_id:
+        session = self.managed_session_state.get_session(agent_id)
+        runtime = self._runtime_for_session(agent_id)
+        if session is None or runtime is None or session.status != "running" or runtime.stop_requested or runtime.current_task_id:
+            return None
+        if not session.queue_id:
             return None
         try:
-            queue = self.task_queue_manager.get_queue(agent.queue_id)
+            queue = self.task_queue_manager.get_queue(session.queue_id)
         except KeyError:
-            return None
-        if any(task.status == "running" for task in queue.tasks):
             return None
         next_task = next((task for task in queue.tasks if task.status == "queued"), None)
         if next_task is None:
             return None
         running_task = self.task_queue_manager.update_task(queue.queue_id, next_task.task_id, status="running")
-        command_args = self._task_command_args(agent, running_task)
-        self.agent_manager._start_agent(
+        marker = uuid.uuid4().hex
+        runtime.current_task_id = running_task.task_id
+        runtime.current_marker = marker
+        self.managed_session_state.update_session(agent_id, current_task_id=running_task.task_id)
+        self.managed_session_state.append_message(
             agent_id,
-            run_command_args=command_args,
-            current_task_id=running_task.task_id,
-            on_exit=self._handle_session_run_finished,
+            kind="input",
+            text=self._task_input_text(running_task),
+            task_id=running_task.task_id,
         )
+        command_chunk = self._command_chunk(running_task.title, marker)
+        try:
+            if runtime.process.stdin is None:
+                raise RuntimeError("session stdin is unavailable")
+            with runtime.stdin_lock:
+                runtime.process.stdin.write(command_chunk)
+                runtime.process.stdin.flush()
+        except Exception as exc:
+            runtime.current_task_id = ""
+            runtime.current_marker = ""
+            self.managed_session_state.update_session(agent_id, current_task_id="")
+            self.task_queue_manager.update_task(queue.queue_id, running_task.task_id, status="failed")
+            self.managed_session_state.append_message(
+                agent_id,
+                kind="error",
+                text=f"Failed to send queue item: {exc}\n",
+                task_id=running_task.task_id,
+            )
+            raise
         return self.task_queue_manager.get_task(queue.queue_id, running_task.task_id).to_dict()
+
+    def _handle_task_finished(self, agent_id: str, task_id: str, returncode: int) -> None:
+        if not task_id:
+            return
+        runtime = self._runtime_for_session(agent_id)
+        if runtime is not None:
+            runtime.current_task_id = ""
+            runtime.current_marker = ""
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
+            return
+        self.managed_session_state.update_session(agent_id, current_task_id="")
+        if session.queue_id:
+            try:
+                self.task_queue_manager.update_task(
+                    session.queue_id,
+                    task_id,
+                    status="completed" if returncode == 0 else "failed",
+                )
+            except KeyError:
+                pass
+        if returncode != 0:
+            self.managed_session_state.append_message(
+                agent_id,
+                kind="error",
+                text=f"Command exited with status {returncode}.\n",
+                task_id=task_id,
+                merge_output=True,
+            )
+        refreshed = self.managed_session_state.get_session(agent_id)
+        if refreshed is not None and refreshed.status == "running":
+            self._start_next_queued_task(agent_id)
 
     def add_session_task(self, queue_id: str, *, title: str, details: str = "") -> dict[str, Any]:
         created = self.task_queue_manager.add_task(queue_id, title=title, details=details, status="queued")
-        agent = self._agent_for_queue(queue_id)
-        if agent is not None and agent.status != "running":
-            self._start_next_queued_task(agent.agent_id)
+        session = self._session_for_queue(queue_id)
+        if session is not None and session.status == "running":
+            self._start_next_queued_task(session.agent_id)
         return self.task_queue_manager.get_task(queue_id, created.task_id).to_dict()
 
-    def start_managed_session(self, agent_id: str) -> dict[str, Any]:
-        started_task = self._start_next_queued_task(agent_id)
-        agent = self.agent_manager.get_agent(agent_id)
-        if agent is None:
+    def send_to_session(self, agent_id: str, *, text: str, details: str = "") -> dict[str, Any]:
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
             raise KeyError(agent_id)
-        if started_task is None and agent.status != "running":
-            raise ValueError("queue is empty")
-        queue: QueueRecord | None = None
-        if agent.queue_id:
+        if not session.queue_id:
+            raise ValueError("session queue is unavailable")
+        return self.add_session_task(session.queue_id, title=text, details=details)
+
+    def update_session_task(
+        self,
+        queue_id: str,
+        task_id: str,
+        *,
+        title: str | None = None,
+        details: str | None = None,
+    ) -> TaskRecord:
+        task = self.task_queue_manager.get_task(queue_id, task_id)
+        if task.status == "running":
+            raise ValueError("stop the session before editing the running queue item")
+        return self.task_queue_manager.update_task(queue_id, task_id, title=title, details=details)
+
+    def delete_session_task(self, queue_id: str, task_id: str) -> None:
+        task = self.task_queue_manager.get_task(queue_id, task_id)
+        if task.status == "running":
+            raise ValueError("stop the session before deleting the running queue item")
+        self.task_queue_manager.delete_task(queue_id, task_id)
+
+    def reorder_session_tasks(self, queue_id: str, ordered_task_ids: list[str]) -> QueueRecord:
+        queue = self.task_queue_manager.get_queue(queue_id)
+        running_task = next((task for task in queue.tasks if task.status == "running"), None)
+        if running_task is not None and ordered_task_ids[:1] != [running_task.task_id]:
+            raise ValueError("the running queue item must stay at the front")
+        return self.task_queue_manager.reorder_tasks(queue_id, ordered_task_ids)
+
+    def list_session_messages(self, agent_id: str) -> list[dict[str, Any]]:
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
+            raise KeyError(agent_id)
+        return [message.to_dict() for message in self.managed_session_state.list_messages(agent_id)]
+
+    def start_managed_session(self, agent_id: str) -> dict[str, Any]:
+        session = self._start_session_runtime(agent_id)
+        queue = None
+        if session.queue_id:
             try:
-                queue = self.task_queue_manager.get_queue(agent.queue_id)
+                queue = self.task_queue_manager.get_queue(session.queue_id)
             except KeyError:
                 queue = None
-        return self._session_payload(agent, queue)
+        return self._session_payload(session, queue)
 
-    def stop_managed_session(self, agent_id: str, *, settle_timeout: float = 1.0) -> dict[str, Any]:
-        self.agent_manager.stop_agent(agent_id)
+    def stop_managed_session(self, agent_id: str, *, settle_timeout: float = 2.0) -> dict[str, Any]:
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
+            raise KeyError(agent_id)
+        runtime = self._runtime_for_session(agent_id)
+        if runtime is None or runtime.process.poll() is not None:
+            session = self.managed_session_state.update_session(
+                agent_id,
+                status="stopped",
+                current_task_id="",
+                stopped_at=utc_now(),
+            )
+            queue = None
+            if session.queue_id:
+                try:
+                    queue = self.task_queue_manager.get_queue(session.queue_id)
+                except KeyError:
+                    queue = None
+            return self._session_payload(session, queue)
+        runtime.stop_requested = True
+        runtime.process.terminate()
         deadline = time.time() + settle_timeout
         while time.time() < deadline:
-            agent = self.agent_manager.get_agent(agent_id)
-            if agent is None:
+            refreshed = self.managed_session_state.get_session(agent_id)
+            if refreshed is None:
                 raise KeyError(agent_id)
-            if not agent.current_task_id and agent.status != "running":
+            if refreshed.status == "stopped" and not refreshed.current_task_id:
                 break
             time.sleep(0.05)
-        agent = self.agent_manager.get_agent(agent_id)
-        if agent is None:
+        if runtime.process.poll() is None:
+            runtime.process.kill()
+            runtime.process.wait(timeout=settle_timeout)
+        refreshed_runtime = self._runtime_for_session(agent_id)
+        if refreshed_runtime is not None and refreshed_runtime.process.poll() is not None:
+            self._handle_runtime_exit(agent_id, refreshed_runtime.process.returncode or 0)
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
             raise KeyError(agent_id)
-        queue: QueueRecord | None = None
-        if agent.queue_id:
+        queue = None
+        if session.queue_id:
             try:
-                queue = self.task_queue_manager.get_queue(agent.queue_id)
+                queue = self.task_queue_manager.get_queue(session.queue_id)
             except KeyError:
                 queue = None
-        return self._session_payload(agent, queue)
+        return self._session_payload(session, queue)
 
     def delete_managed_session(self, agent_id: str) -> None:
-        agent = self.agent_manager.get_agent(agent_id)
-        if agent is None:
+        session = self.managed_session_state.get_session(agent_id)
+        if session is None:
             raise KeyError(agent_id)
-        if agent.status == "running":
+        if session.status == "running":
             raise ValueError("stop the session before deleting it")
-        self.agent_manager.delete_agent(agent_id)
-        if agent.queue_id:
+        self.managed_session_state.delete_session(agent_id)
+        if session.queue_id:
             try:
-                self.task_queue_manager.delete_queue(agent.queue_id)
+                self.task_queue_manager.delete_queue(session.queue_id)
             except KeyError:
                 pass
 
-    def _read_output(self, log_path: str | None, *, max_bytes: int = 6000) -> str:
-        if not log_path:
-            return ""
-        path = Path(log_path)
-        if not path.exists():
-            return ""
-        try:
-            with path.open("rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                handle.seek(max(size - max_bytes, 0))
-                data = handle.read()
-        except OSError:
-            return ""
-        text = data.decode("utf-8", errors="replace")
-        if len(text.encode("utf-8", errors="replace")) >= max_bytes and "\n" in text:
-            text = text.split("\n", 1)[1]
-        return text.strip()
+    def _visible_output(self, agent_id: str, *, max_bytes: int = 6000) -> str:
+        fragments: list[str] = []
+        for message in self.managed_session_state.list_messages(agent_id):
+            if message.kind == "input":
+                fragments.append(f"$ {message.text}\n")
+                continue
+            fragments.append(message.text)
+        text = "".join(fragments)
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) <= max_bytes:
+            return text.strip()
+        truncated = encoded[-max_bytes:].decode("utf-8", errors="replace")
+        if "\n" in truncated:
+            truncated = truncated.split("\n", 1)[1]
+        return truncated.strip()
 
-    def _session_payload(self, agent: Any, queue: Any | None) -> dict[str, Any]:
-        payload = agent.to_dict() if hasattr(agent, "to_dict") else dict(agent)
-        payload["agent_status"] = payload.get("status", "stopped")
-        payload["status"] = "running" if payload.get("agent_status") == "running" else "stopped"
-        queue_payload = queue.to_dict() if queue is not None and hasattr(queue, "to_dict") else (queue or {})
-        payload["queue"] = queue_payload
-        payload["output"] = self._read_output(payload.get("log_path"))
+    def _session_payload(self, session: ManagedSessionRecord, queue: QueueRecord | None) -> dict[str, Any]:
+        payload = session.to_dict()
+        payload["agent_status"] = session.status
+        payload["status"] = session.status
+        payload["queue"] = queue.to_dict() if queue is not None else {}
+        payload["messages"] = [message.to_dict() for message in self.managed_session_state.list_messages(session.agent_id)]
+        payload["output"] = self._visible_output(session.agent_id)
         return payload
 
     def list_session_payloads(self) -> list[dict[str, Any]]:
-        agents = self.agent_manager.list_agents()
         queues_by_id = {queue.queue_id: queue for queue in self.task_queue_manager.list_queues()}
-        sessions = [self._session_payload(agent, queues_by_id.get(agent.queue_id)) for agent in agents]
+        sessions = [
+            self._session_payload(session, queues_by_id.get(session.queue_id))
+            for session in self.managed_session_state.list_sessions()
+        ]
         sessions.sort(key=lambda item: item.get("created_at", ""), reverse=True)
         return sessions
 
@@ -639,7 +1110,7 @@ INDEX_HTML = """<!doctype html>
     <header class=\"hero\">
       <p class=\"eyebrow\">Secure Mindex operations</p>
       <h1>{title}</h1>
-      <p class=\"lede\">A minimal browser view for Mindex sessions, their queue order, and their visible output.</p>
+      <p class=\"lede\">A minimal browser view for live sessions, their queue order, and the visible transcript for each run.</p>
     </header>
     <main id=\"app\" class=\"app\"></main>
   </div>
@@ -867,6 +1338,41 @@ code,
   font-size: 0.84rem;
   line-height: 1.5;
 }
+.message-feed {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+.message-item {
+  border-radius: 14px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+.message-input {
+  border-color: rgba(168, 77, 45, 0.4);
+  background: rgba(168, 77, 45, 0.12);
+}
+.message-error {
+  border-color: rgba(139, 47, 61, 0.42);
+  background: rgba(139, 47, 61, 0.14);
+}
+.message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.message-text {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
 .task-list {
   list-style: none;
   margin: 0;
@@ -936,7 +1442,7 @@ code,
 
 
 APP_JS = """
-const state = { csrfToken: null };
+const state = { csrfToken: null, refreshTimer: null, loading: false };
 
 async function api(path, options = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
@@ -987,6 +1493,10 @@ function setNotice(node, message = '') {
 }
 
 function renderLogin(message = '') {
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer);
+    state.refreshTimer = null;
+  }
   const app = document.getElementById('app');
   app.innerHTML = `
     <section class="panel login-card stack">
@@ -1044,11 +1554,29 @@ function renderTaskCard(queueId, task, isFrontRunning = false) {
     </li>`;
 }
 
+function renderMessage(message) {
+  const kind = String(message.kind || 'output');
+  const label = {
+    input: 'Queued item',
+    output: 'Output',
+    system: 'Session',
+    error: 'Error',
+  }[kind] || 'Output';
+  return `
+    <article class="message-item message-${escapeHtml(kind)}">
+      <div class="message-meta">
+        <span class="kicker">${escapeHtml(label)}</span>
+        <span class="muted">${escapeHtml(message.updated_at || message.created_at || '')}</span>
+      </div>
+      <pre class="message-text">${escapeHtml(message.text || '')}</pre>
+    </article>`;
+}
+
 function renderSessionCard(session) {
   const queue = session.queue || {};
   const tasks = queue.tasks || [];
+  const messages = session.messages || [];
   const running = session.status === 'running';
-  const output = session.output || 'No output yet.';
   return `
     <article class="session-card">
       <div class="row-between">
@@ -1074,27 +1602,26 @@ function renderSessionCard(session) {
             <div>
               <p class="kicker">Queue</p>
               <h3>${escapeHtml(queue.name || 'Session queue')}</h3>
-              <p class="muted">${escapeHtml(queue.description || 'Edit this queue and drag tasks into the right order.')}</p>
+              <p class="muted">Adjust the order, edit queued items, and run them in this live session.</p>
             </div>
-            ${queue.queue_id ? `<button class="ghost" type="button" data-edit-queue="${escapeHtml(queue.queue_id)}" data-queue-name="${escapeHtml(queue.name || '')}" data-queue-description="${escapeHtml(queue.description || '')}">Edit queue</button>` : ''}
           </div>
           ${queue.queue_id ? `
             <ul class="task-list" data-task-list="${escapeHtml(queue.queue_id)}">
               ${tasks.length ? tasks.map((task, index) => renderTaskCard(queue.queue_id, task, index === 0 && task.status === 'running')).join('') : '<li class="empty-state">No queue items yet.</li>'}
             </ul>
-            <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}">
-              <label>Task title<input name="title" placeholder="Review failing output" required></label>
-              <label>Task details<textarea name="details" placeholder="Acceptance notes or extra context."></textarea></label>
+            <form class="stack" data-task-form="${escapeHtml(queue.queue_id)}" data-session-id="${escapeHtml(session.agent_id)}">
+              <label>Queue item<input name="title" placeholder="ls" required></label>
+              <label>Notes<textarea name="details" placeholder="Optional notes for this queued item."></textarea></label>
               <div class="button-row"><button class="secondary" type="submit">Add queue item</button></div>
             </form>
           ` : '<div class="empty-state">This legacy session does not have a queue attached.</div>'}
         </section>
         <section class="output-card">
           <div>
-            <p class="kicker">Output</p>
+            <p class="kicker">Transcript</p>
             <h3>Visible session output</h3>
           </div>
-          <pre class="output-text">${escapeHtml(output)}</pre>
+          <div class="message-feed">${messages.length ? messages.map(renderMessage).join('') : '<div class="empty-state">No session output yet.</div>'}</div>
         </section>
       </div>
     </article>`;
@@ -1109,7 +1636,7 @@ function renderDashboard(payload) {
         <div>
           <p class="kicker">Sessions</p>
           <h2>Simple session manager</h2>
-          <p class="muted">Each session owns a queue and shows its output in place.</p>
+          <p class="muted">Each session stays running until you stop it, and its queue drains from the front.</p>
         </div>
         <div class="button-row">
           <button id="refresh-button" class="ghost">Refresh</button>
@@ -1207,12 +1734,17 @@ async function submitTask(event) {
     alert('Unable to find the queue for this form. Refresh and try again.');
     return;
   }
+  const sessionId = formElement.dataset ? formElement.dataset.sessionId : '';
+  if (!sessionId) {
+    alert('Unable to find the session for this queue form. Refresh and try again.');
+    return;
+  }
   const form = new FormData(formElement);
   try {
-    await api(`/api/queues/${queueId}/tasks`, {
+    await api(`/api/sessions/${sessionId}/send`, {
       method: 'POST',
       body: JSON.stringify({
-        title: form.get('title'),
+        text: form.get('title'),
         details: form.get('details'),
       }),
     });
@@ -1328,15 +1860,39 @@ async function logout() {
   renderLogin();
 }
 
+function scheduleRefresh() {
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer);
+  }
+  state.refreshTimer = setTimeout(() => {
+    loadDashboard();
+  }, 1500);
+}
+
 async function loadDashboard() {
+  if (state.loading) {
+    return;
+  }
+  state.loading = true;
   try {
     const payload = await api('/api/status');
     if (payload.csrf_token) {
       state.csrfToken = payload.csrf_token;
     }
-    renderDashboard(payload);
+    const sessions = await Promise.all((payload.sessions || []).map(async session => {
+      try {
+        const messagePayload = await api(`/api/sessions/${session.agent_id}/messages`);
+        return Object.assign({}, session, { messages: messagePayload.messages || [] });
+      } catch (error) {
+        return session;
+      }
+    }));
+    renderDashboard(Object.assign({}, payload, { sessions }));
+    scheduleRefresh();
   } catch (error) {
     renderLogin(error.message === 'authentication required' ? '' : error.message);
+  } finally {
+    state.loading = false;
   }
 }
 
@@ -1490,12 +2046,9 @@ class UiRequestHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
         try:
-            command_args = shlex.split(str(payload.get("command_args", ""))) if "command_args" in payload else []
             session_payload = self.app.create_managed_session(
                 name=str(payload.get("name", "")),
-                command_args=command_args,
                 workdir=str(payload.get("workdir", self.app.config.project_root)),
-                queue_description=str(payload.get("queue_description", "")),
             )
         except ValueError as exc:
             return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -1516,6 +2069,27 @@ class UiRequestHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return _json_response(self, HTTPStatus.OK, {"ok": True})
+        if len(segments) == 4 and segments[3] == "messages" and self.command == "GET":
+            try:
+                messages = self.app.list_session_messages(agent_id)
+            except KeyError:
+                return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
+            return _json_response(self, HTTPStatus.OK, {"messages": messages})
+        if len(segments) == 4 and segments[3] == "send" and self.command == "POST":
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            try:
+                task = self.app.send_to_session(
+                    agent_id,
+                    text=str(payload.get("text", "")),
+                    details=str(payload.get("details", "")),
+                )
+            except KeyError:
+                return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "session not found"})
+            except ValueError as exc:
+                return _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return _json_response(self, HTTPStatus.CREATED, {"task": task})
         if len(segments) != 4 or self.command != "POST":
             return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
         action = segments[3]
@@ -1621,7 +2195,7 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                 if payload is None:
                     return
                 ordered_task_ids = [str(value) for value in payload.get("ordered_task_ids", [])]
-                queue = self.app.task_queue_manager.reorder_tasks(queue_id, ordered_task_ids)
+                queue = self.app.reorder_session_tasks(queue_id, ordered_task_ids)
                 return _json_response(self, HTTPStatus.OK, {"queue": queue.to_dict()})
             if len(segments) == 4 and segments[3] == "tasks" and self.command == "POST":
                 payload = self._read_json_body()
@@ -1639,7 +2213,7 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                     payload = self._read_json_body()
                     if payload is None:
                         return
-                    task = self.app.task_queue_manager.update_task(
+                    task = self.app.update_session_task(
                         queue_id,
                         task_id,
                         title=payload.get("title"),
@@ -1647,7 +2221,7 @@ class UiRequestHandler(BaseHTTPRequestHandler):
                     )
                     return _json_response(self, HTTPStatus.OK, {"task": task.to_dict()})
                 if self.command == "DELETE":
-                    self.app.task_queue_manager.delete_task(queue_id, task_id)
+                    self.app.delete_session_task(queue_id, task_id)
                     return _json_response(self, HTTPStatus.OK, {"ok": True})
         except KeyError:
             return _json_response(self, HTTPStatus.NOT_FOUND, {"error": "queue or task not found"})

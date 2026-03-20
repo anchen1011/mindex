@@ -8,8 +8,11 @@ import subprocess
 from typing import Iterable
 
 from mindex.codex_home import default_managed_codex_home, default_managed_logs_root
-from mindex.github_workflow import WorkflowError, ensure_feature_branch, run_post_action_hook
+from mindex.github_workflow import WorkflowError, ensure_feature_branch, initialize_local_git_repository, run_post_action_hook
 from mindex.logging_utils import append_action, create_log_run, write_status
+
+
+YOLO_FLAGS = ["--dangerously-bypass-approvals-and-sandbox"]
 
 
 def _git_toplevel(start: Path, *, env: dict[str, str] | None = None) -> Path | None:
@@ -67,6 +70,20 @@ def resolve_codex_command(env: dict[str, str] | None = None) -> str:
     return os.environ.get("MINDEX_CODEX_BIN", "codex")
 
 
+def apply_default_yolo(argv: Iterable[str]) -> list[str]:
+    args = list(argv)
+    for index, value in enumerate(args):
+        if value in {"--dangerously-bypass-approvals-and-sandbox", "--full-auto"}:
+            return args
+        if value in {"-a", "--ask-for-approval", "-s", "--sandbox"}:
+            return args
+        if value == "-c" and index + 1 < len(args):
+            config_value = args[index + 1]
+            if config_value.startswith("approval_policy=") or config_value.startswith("sandbox_mode="):
+                return args
+    return [*YOLO_FLAGS, *args]
+
+
 def launch_codex(
     argv: Iterable[str],
     *,
@@ -74,17 +91,18 @@ def launch_codex(
     logs_root: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> int:
-    args = list(argv)
+    args = apply_default_yolo(argv)
     launch_root = find_project_root(project_root)
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
-    resolved_logs_root = Path(logs_root).resolve() if logs_root else resolve_logs_root(launch_root, env=run_env)
     managed_codex_home = default_managed_codex_home(env=run_env)
     run_env["MINDEX_CODEX_HOME"] = str(managed_codex_home)
     run_env["CODEX_HOME"] = str(managed_codex_home)
     run_env["MINDEX_PROJECT_ROOT"] = str(launch_root)
     command = [resolve_codex_command(run_env), *args]
+    repo_init_result = initialize_local_git_repository(launch_root, env=run_env)
+    resolved_logs_root = Path(logs_root).resolve() if logs_root else resolve_logs_root(launch_root, env=run_env)
 
     log_run = create_log_run(
         resolved_logs_root,
@@ -99,6 +117,15 @@ def launch_codex(
     )
     append_action(log_run, f"Proxy command: {shlex.join(command)}")
     append_action(log_run, f"Managed Codex home: {managed_codex_home}")
+    if repo_init_result.initialized:
+        append_action(
+            log_run,
+            f"Initialized a local Git repository for this project with default branch {repo_init_result.branch_name}.",
+        )
+    elif repo_init_result.skipped_reason == "unsafe-project-root":
+        append_action(log_run, "Skipped local Git initialization because the detected project root is not safe to manage.")
+    elif repo_init_result.skipped_reason == "disabled-by-env":
+        append_action(log_run, "Skipped local Git initialization because MINDEX_AUTO_INIT_GIT is disabled.")
 
     try:
         requested_branch = run_env.get("MINDEX_FEATURE_BRANCH")

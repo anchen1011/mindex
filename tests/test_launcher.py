@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from mindex.codex_home import default_managed_logs_root
-from mindex.launcher import find_project_root, launch_codex
+from mindex.launcher import apply_default_yolo, find_project_root, launch_codex
 
 
 class LauncherTests(unittest.TestCase):
@@ -128,6 +128,29 @@ class LauncherTests(unittest.TestCase):
 
             self.assertEqual(find_project_root(nested), root.resolve())
 
+    def test_apply_default_yolo_prefixes_launches_without_execution_overrides(self) -> None:
+        self.assertEqual(
+            apply_default_yolo(["review", "README.md"]),
+            ["--dangerously-bypass-approvals-and-sandbox", "review", "README.md"],
+        )
+
+    def test_apply_default_yolo_respects_explicit_execution_mode_flags(self) -> None:
+        self.assertEqual(apply_default_yolo(["--full-auto", "review"]), ["--full-auto", "review"])
+        self.assertEqual(apply_default_yolo(["-a", "never", "review"]), ["-a", "never", "review"])
+        self.assertEqual(
+            apply_default_yolo(["--ask-for-approval", "on-request", "review"]),
+            ["--ask-for-approval", "on-request", "review"],
+        )
+        self.assertEqual(apply_default_yolo(["-s", "workspace-write", "review"]), ["-s", "workspace-write", "review"])
+        self.assertEqual(
+            apply_default_yolo(["-c", 'approval_policy="on-request"', "review"]),
+            ["-c", 'approval_policy="on-request"', "review"],
+        )
+        self.assertEqual(
+            apply_default_yolo(["-c", 'sandbox_mode="workspace-write"', "review"]),
+            ["-c", 'sandbox_mode="workspace-write"', "review"],
+        )
+
     def test_python_module_cli_supports_direct_execution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         completed = subprocess.run(
@@ -179,7 +202,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
-            self.assertEqual(payload["args"], ["status", "--json"])
+            self.assertEqual(payload["args"], ["--dangerously-bypass-approvals-and-sandbox", "status", "--json"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             status_files = list(logs_root.glob("**/status.json"))
@@ -225,13 +248,78 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(standalone.resolve()))
-            self.assertEqual(payload["args"], [])
+            self.assertEqual(payload["args"], ["--dangerously-bypass-approvals-and-sandbox"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             self.assertFalse((standalone / "logs").exists())
             self.assertEqual(default_managed_logs_root(env=env), managed_logs_root.resolve())
 
             status_files = list(managed_logs_root.glob("**/*-launcher/status.json"))
+            self.assertEqual(len(status_files), 1)
+            status = json.loads(status_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(status["status"], "success")
+            self.assertEqual(status["returncode"], 0)
+
+    def test_launch_codex_initializes_local_git_repo_for_non_git_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "project"
+            nested = root / "src"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            output_path = Path(tmpdir) / "codex-output.json"
+            root.mkdir()
+            nested.mkdir(parents=True)
+            fake_bin_dir.mkdir()
+            (root / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, subprocess, sys\n"
+                "branch = subprocess.run(\n"
+                "    ['git', 'symbolic-ref', '--short', 'HEAD'],\n"
+                "    check=True,\n"
+                "    capture_output=True,\n"
+                "    text=True,\n"
+                ").stdout.strip()\n"
+                "with open(os.environ['MINDEX_FAKE_OUTPUT'], 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:], 'branch': branch}, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(nested)
+                returncode = launch_codex(
+                    ["plan"],
+                    project_root=root,
+                    env={
+                        "MINDEX_CODEX_BIN": str(fake_codex),
+                        "MINDEX_DISABLE_SCRIPT": "1",
+                        "MINDEX_AUTO_PUBLISH": "0",
+                        "MINDEX_FAKE_OUTPUT": str(output_path),
+                    },
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(returncode, 0)
+            self.assertTrue((root / ".git").is_dir())
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cwd"], str(root.resolve()))
+            self.assertEqual(payload["args"], ["--dangerously-bypass-approvals-and-sandbox", "plan"])
+            self.assertEqual(payload["branch"], "mindex/codex-session")
+
+            current_branch = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(current_branch, "mindex/codex-session")
+
+            status_files = list((root / "logs").glob("**/*-launcher/status.json"))
             self.assertEqual(len(status_files), 1)
             status = json.loads(status_files[0].read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "success")
@@ -282,7 +370,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["branch"], feature_branch)
-            self.assertEqual(payload["args"], ["status"])
+            self.assertEqual(payload["args"], ["--dangerously-bypass-approvals-and-sandbox", "status"])
             current_branch = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(root),
@@ -556,7 +644,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(returncode, 0)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["cwd"], str(root.resolve()))
-            self.assertEqual(payload["args"], ["fix", "bug"])
+            self.assertEqual(payload["args"], ["--dangerously-bypass-approvals-and-sandbox", "fix", "bug"])
             self.assertEqual(payload["codex_home"], str((Path.home() / ".mindex" / "codex-home").resolve()))
 
             current_branch = subprocess.run(
