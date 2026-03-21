@@ -4,10 +4,10 @@ import sys
 from typing import Iterable
 
 from mindex import __version__
+from mindex.codoxear import main as codoxear_main
 from mindex.configure import main as configure_main
 from mindex.github_workflow import main as github_workflow_main
 from mindex.launcher import find_project_root, launch_codex
-from mindex.ui import main as ui_main
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -25,8 +25,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         if "--project-root" not in publish_args:
             publish_args.extend(["--project-root", str(project_root)])
         return github_workflow_main(publish_args)
-    if args[0] == "ui":
-        return ui_main(args[1:])
+    if args[0] in {"codoxear", "ui"}:
+        return codoxear_main(args[1:], invoked_as=args[0])
     return launch_codex(args, project_root=project_root)
 
 

@@ -26,8 +26,9 @@ There are two simple setup paths:
    validation results under `logs/` for better observability.
 3. **Automatic commits and PRs:** Mindex defaults to feature-branch
    publication so changes are easier to trace, review, and control.
-4. **Live session queue UI:** Mindex includes a local UI for managing simple
-   live sessions, per-session queues, and visible transcripts.
+4. **Codoxear UI integration:** Mindex can launch Codoxear's mobile-friendly UI
+   for Codex sessions while keeping Mindex-managed settings and avoiding
+   plaintext password storage.
 
 Next, we will keep improving the Harness with a strong focus on **security**,
 **testing**, and **memory**.
@@ -40,8 +41,8 @@ The repository currently includes:
 - structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
-- a secure local web UI for managing live sessions, queue order, and session
-  transcripts
+- a Codoxear-based UI workflow for mobile-friendly session handoff (with
+  Mindex-managed config and safer secret handling)
 
 The repository now has an initial implementation for the core runtime features
 below, with additional hardening and integration work still in progress.
@@ -79,6 +80,8 @@ Implemented behavior:
 - symlinks packaged skills back to the source tree when possible so editable
   installs pick up skill edits from the repo immediately
 - writes a managed `[profiles.mindex]` block into the Codex config file
+- makes the managed `mindex` profile default to YOLO execution with
+  `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
 - prepares dependency installation commands for Miniconda, NPM, Tmux, and
@@ -208,76 +211,53 @@ Implemented behavior:
 - records publication metadata, command output, and PR verification details
   under `logs/`
 
-### 6. Secure web UI
+### 6. Codoxear UI (recommended)
 
-Mindex now includes a browser-accessible control surface for managing queued
-live session queues and their visible transcripts.
+Mindex no longer ships an in-tree UI implementation. Instead, it integrates
+with Codoxear, an external lightweight web UI designed for continuing the same
+live Codex TUI session from a phone or browser.
 
 Current commands:
 
-- `mindex ui init-config --project-root <root>`
-- `mindex ui reset-config --project-root <root>`
-- `mindex ui serve --project-root <root>`
-- `mindex ui serve --project-root <root> --dev`
+- `mindex codoxear install`
+- `mindex codoxear init-config`
+- `mindex codoxear reset-config`
+- `mindex codoxear serve`
+- `mindex ui ...` is kept as a compatibility alias for `mindex codoxear ...`
 
 Implemented behavior:
 
-- creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
-  hash instead of storing a plaintext password
-- keeps the default UI username as `admin` and prompts `mindex ui init-config`
-  for the password when `--password` is not supplied
-- lets `mindex ui reset-config` rewrite `.mindex/ui_config.json` from scratch
-  with fresh credentials, session secrets, and localhost-first server defaults
-- defaults the server to `127.0.0.1` and requires an explicit
-  `allow_remote=true` config choice before binding to non-localhost interfaces
-- when remote binding is enabled, automatically allows browser origins for the
-  configured port across localhost, loopback IPv6, and discovered machine
-  hostnames/IPs while still honoring explicit `allowed_origins` entries for
-  custom aliases
-- serves a simpler session-first browser view where each session owns one
-  editable queue, supports drag-to-reorder queue items, and shows its
-  transcript inline
-- lets a new session be created from just its name and workdir, immediately
-  starting a live shell-backed session for that workspace
-- stores opaque session cookies in-memory, uses CSRF tokens for state-changing
-  requests, and rate-limits repeated login failures
-- supports explicit `--disable-origin-checks` and `--disable-csrf-checks`
-  overrides for operators who need to bypass those protections in public or
-  cross-origin deployments
-- supports `mindex ui serve --dev` for local iteration, which watches the
-  packaged `mindex/*.py` UI code plus `.mindex/ui_config.json`, restarts the
-  child server on changes, and disables origin/CSRF checks in that dev child
-  without permanently rewriting the saved UI config
-- persists session queue state and transcript messages under
-  `.mindex/task_queues.json`, including queue names, ordered task lists, and
-  per-session message history
-- lets users add, edit, delete, and drag-to-reorder tasks inside each
-  session-owned queue so upcoming work can be reprioritized directly in the
-  browser, and automatically drives those tasks through `queued`, `running`,
-  `completed`, or `failed` execution states instead of relying on manual task
-  status entry; stopping a session interrupts the active task and returns it to
-  the front of the queue so the next start resumes from that item
-- exposes the session transcript through the browser and through
-  `/api/sessions/<id>/messages`, while queue submissions can use
-  `/api/sessions/<id>/send` so a session behaves more like a persistent
-  conversation than a one-process-per-task launcher
-- presents each session itself as either `running` or `stopped`, and visually
-  highlights the front queue item when it is the active running task
-- keeps session workdirs constrained to the configured project root, preserves
-  one live shell per running session, and drains queued commands inside that
-  same session instead of launching a fresh subprocess per queue item
-- migrates legacy `.mindex/ui_config.json` files that still contain a plaintext
-  password and rewrites them into the secure hash-based format
+- stores Codoxear configuration under `~/.mindex/codoxear/config.json` (or
+  `MINDEX_CODOXEAR_CONFIG_PATH`), not inside a repository
+- never stores the Codoxear password in plaintext; only a salted PBKDF2 hash is
+  persisted
+- prompts for the password at serve time (or accepts `--password`) and then
+  passes it to Codoxear via the `CODEX_WEB_PASSWORD` environment variable for
+  the duration of the server process
+- defaults to localhost-only binding (`127.0.0.1`) and refuses to bind to
+  `0.0.0.0` / `::` unless `allow_remote=true` is explicitly configured
+- defaults `CODEX_BIN` to `mindex` so Codoxear-launched sessions inherit
+  Mindex-managed behavior by default
 
-Design direction:
+Usage notes:
 
-- draws on the browser-accessible Codex control-room model shown by CodexUI and
-  the OpenAI Codex app, especially around session visibility and agent
-  management
-- keeps the remote-access convenience of community Codex web frontends, but
-  hardens Mindex with localhost-first binding, hashed credentials, CSRF
-  protection, and origin checks because reference projects explicitly leave
-  parts of that threat model to the operator
+- Codoxear also provides `codoxear-broker` for registering terminal-owned
+  sessions. The upstream project recommends adding a shell function:
+
+  ```sh
+  codox() {
+    codoxear-broker -- "$@"
+  }
+  ```
+
+  Use `CODEX_BIN=mindex codox ...` if you want brokered sessions to launch
+  through Mindex.
+
+Security warning:
+
+- Codoxear's upstream security model is intentionally minimal (password gating
+  only, no TLS). If you enable remote binding, use a secure transport (VPN,
+  SSH port-forward, or TLS reverse proxy).
 
 ### 7. Multi-agent branch and PR coordination skill
 
