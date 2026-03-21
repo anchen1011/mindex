@@ -81,8 +81,8 @@ Implemented behavior:
 - writes a managed `[profiles.mindex]` block into the Codex config file
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
-- prepares dependency installation commands for Miniconda, NPM, Tmux, and
-  Codex
+- prepares dependency installation commands for Miniconda, NPM, Tmux, Codex,
+  and RTK
 - records configure runs under `logs/`
 
 Target workflows:
@@ -93,7 +93,8 @@ Target workflows:
     point across projects
   - allow `mindex configure` to be run globally without a project argument
   - keep the original `codex` command available in its normal vanilla state
-  - install required dependencies, including Miniconda, Codex, NPM, and Tmux
+  - install required dependencies, including Miniconda, Codex, NPM, Tmux, and
+    RTK
 
 - **Existing Codex workflow**
   - allow a user who already has Codex installed to ask Codex to configure

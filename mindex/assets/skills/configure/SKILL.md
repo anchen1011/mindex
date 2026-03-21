@@ -39,7 +39,7 @@ that Codex environment.
 
 1. Prefer a dry run first when you need to inspect the generated plan.
 2. Confirm the current workspace context when you pass `--project-root`; otherwise treat configure as a global Mindex setup step.
-3. Review the dependency command plan for Miniconda, Codex, NPM, and Tmux.
+3. Review the dependency command plan for Miniconda, Codex, NPM, Tmux, and RTK.
 4. Review the managed instructions to confirm they describe Mindex as a Codex wrapper, explain the `mindex` versus vanilla `codex` distinction, enforce the GitHub branch and fork policy, require verified PR creation on GitHub, commit the work as part of the default publication flow, and isolate concurrent agents onto separate branches and PRs by default.
 5. Confirm the packaged skills include `configure`, `repo`, and `multi-agent`.
 6. Re-run without `--dry-run` to apply the managed files.

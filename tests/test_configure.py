@@ -37,6 +37,8 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("configure", plan["packaged_skills"])
             self.assertIn("multi-agent", plan["packaged_skills"])
             self.assertIn("repo", plan["packaged_skills"])
+            self.assertTrue(any("rtk-ai/rtk" in command for command in plan["dependency_commands"]))
+            self.assertIn("rtk --version", plan["dependency_commands"])
 
     def test_configure_defaults_to_global_managed_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

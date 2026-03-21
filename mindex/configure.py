@@ -53,6 +53,8 @@ def build_dependency_commands(project_root: Path | None) -> list[str]:
         f"{conda_exe} run -n mindex pip install {install_target}",
         "npm install -g @openai/codex",
         "python -m pip install --upgrade openai-codex || pip install --upgrade openai-codex",
+        "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh",
+        "rtk --version",
         "tmux -V",
     ]
 
@@ -77,6 +79,7 @@ globally across workspaces.
 ## Operating rules
 
 - Run explicit tests for every meaningful change and record the results under `logs/`.
+- When available, prefer `rtk ...` for high-volume shell output (diffs, logs, large test runs) to reduce token usage.
 - Keep the original `codex` command untouched; it remains the plain vanilla Codex command.
 - Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings across projects.
 - Load Mindex-managed skills from `~/.mindex/codex-home/skills` instead of reusing `~/.codex/skills`.
