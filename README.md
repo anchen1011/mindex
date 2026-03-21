@@ -223,6 +223,7 @@ Current commands:
 - `mindex codoxear init-config`
 - `mindex codoxear reset-config`
 - `mindex codoxear serve`
+- `mindex codoxear broker -- <codex args>`
 - `mindex ui ...` is kept as a compatibility alias for `mindex codoxear ...`
 
 Implemented behavior:
@@ -241,17 +242,19 @@ Implemented behavior:
 
 Usage notes:
 
-- Codoxear also provides `codoxear-broker` for registering terminal-owned
-  sessions. The upstream project recommends adding a shell function:
+- Codoxear also provides a broker for registering terminal-owned sessions.
+  Mindex exposes it as `mindex codoxear broker` so you do not need to put the
+  venv binary on your `PATH`. If you want a short command, add a shell
+  function:
 
   ```sh
   codox() {
-    codoxear-broker -- "$@"
+    mindex codoxear broker -- "$@"
   }
   ```
 
-  Use `CODEX_BIN=mindex codox ...` if you want brokered sessions to launch
-  through Mindex.
+  By default, Mindex config sets `CODEX_BIN=mindex` so brokered sessions also
+  launch through Mindex.
 
 Security warning:
 

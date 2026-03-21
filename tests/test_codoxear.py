@@ -79,7 +79,16 @@ class CodoxearConfigTests(unittest.TestCase):
         self.assertEqual(env["CODEX_HOME"], "/tmp/codex-home")
         self.assertEqual(env["CODEX_BIN"], "mindex")
 
+    def test_find_broker_prefers_mindex_venv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_dir = Path(tmp) / "venv"
+            broker = venv_dir / "bin" / "codoxear-broker"
+            broker.parent.mkdir(parents=True, exist_ok=True)
+            broker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            broker.chmod(0o755)
+            found = codoxear._find_codoxear_broker(env={"MINDEX_CODOXEAR_VENV_DIR": str(venv_dir)})
+            self.assertEqual(found, str(broker))
+
 
 if __name__ == "__main__":
     unittest.main()
-

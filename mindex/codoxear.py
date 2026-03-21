@@ -193,6 +193,13 @@ def _find_codoxear_server(*, env: dict[str, str] | None = None) -> str | None:
     return shutil.which("codoxear-server")
 
 
+def _find_codoxear_broker(*, env: dict[str, str] | None = None) -> str | None:
+    venv_bin = _default_venv_dir(env) / "bin" / "codoxear-broker"
+    if venv_bin.exists():
+        return str(venv_bin)
+    return shutil.which("codoxear-broker")
+
+
 def _run_install(argv: list[str], *, env: dict[str, str] | None, log_run) -> int:
     parser = argparse.ArgumentParser(prog="mindex codoxear install")
     parser.add_argument(
@@ -341,6 +348,34 @@ def _serve(argv: list[str], *, env: dict[str, str] | None, invoked_as: str) -> i
     return subprocess.run([server_bin], env=env_map, check=False).returncode
 
 
+def _broker(argv: list[str], *, env: dict[str, str] | None, invoked_as: str) -> int:
+    parser = argparse.ArgumentParser(prog=f"mindex {invoked_as} broker")
+    parser.add_argument(
+        "codex_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments for Codex (prefix with `--` to match codoxear-broker usage).",
+    )
+    args = parser.parse_args(argv)
+
+    broker_bin = _find_codoxear_broker(env=env)
+    if broker_bin is None:
+        raise SystemExit(
+            "codoxear-broker not found. Run `mindex codoxear install` first (installs into ~/.mindex/codoxear/venv)."
+        )
+
+    config = load_config(env=env)
+    codex_args = list(args.codex_args)
+    if codex_args and codex_args[0] == "--":
+        codex_args = codex_args[1:]
+
+    # Broker does not need the web password; it just registers the terminal
+    # session so Codoxear can discover and attach to it.
+    env_map = os.environ.copy()
+    env_map["CODEX_HOME"] = config.codex_home
+    env_map["CODEX_BIN"] = config.codex_bin
+    return subprocess.run([broker_bin, "--", *codex_args], env=env_map, check=False).returncode
+
+
 def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     env = None
@@ -356,7 +391,7 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
             args = ["serve"]
 
     if not args:
-        raise SystemExit(f"Usage: mindex {invoked_as} <install|init-config|reset-config|serve>")
+        raise SystemExit(f"Usage: mindex {invoked_as} <install|init-config|reset-config|serve|broker>")
 
     sub = args[0]
     tail = args[1:]
@@ -379,6 +414,8 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
             rc = _init_or_reset_config(argv=tail, env=env, overwrite=True, invoked_as=invoked_as)
         elif sub == "serve":
             rc = _serve(tail, env=env, invoked_as=invoked_as)
+        elif sub == "broker":
+            rc = _broker(tail, env=env, invoked_as=invoked_as)
         else:
             raise SystemExit(f"Unknown subcommand: {sub}")
         write_status(log_run, "ok", returncode=rc)
