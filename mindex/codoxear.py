@@ -22,7 +22,9 @@ PASSWORD_ITERATIONS = 390000
 DEFAULT_HOST_LOCAL = "127.0.0.1"
 DEFAULT_PORT = 8743
 DEFAULT_CODEX_BIN = "mindex"
-DEFAULT_INSTALL_URL = "git+https://github.com/yiwenlu66/codoxear"
+# Pin to a known-good commit by default for reproducible installs.
+# Users can override with `--source` if they want to track upstream.
+DEFAULT_INSTALL_URL = "git+https://github.com/yiwenlu66/codoxear@8ba8690a4badaf7a5cff3c5a00e9f6ab39647770"
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,68 @@ def _build_config_payload(
             "config_path": str(config_path),
         },
     }
+
+
+def _sanitize_argv_for_logging(argv: list[str]) -> list[str]:
+    """Redact secrets from argv before writing to logs."""
+    sanitized: list[str] = []
+    idx = 0
+    while idx < len(argv):
+        item = argv[idx]
+        if item == "--password":
+            sanitized.append("--password")
+            if idx + 1 < len(argv):
+                sanitized.append("****")
+                idx += 2
+                continue
+            idx += 1
+            continue
+        if item.startswith("--password="):
+            sanitized.append("--password=****")
+            idx += 1
+            continue
+        sanitized.append(item)
+        idx += 1
+    return sanitized
+
+
+def _normalize_legacy_ui_args(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Best-effort compatibility for older `mindex ui` flags."""
+    warnings: list[str] = []
+    args = list(argv)
+
+    # Historical flags we ignore (they were repo-root/UI-dev specifics for the removed UI).
+    def _drop_flag(flag: str, *, takes_value: bool) -> None:
+        nonlocal args
+        if flag not in args:
+            return
+        out: list[str] = []
+        skip_next = False
+        for token in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if token == flag:
+                warnings.append(f"ignoring legacy flag: {flag}")
+                if takes_value:
+                    skip_next = True
+                continue
+            out.append(token)
+        args = out
+
+    _drop_flag("--project-root", takes_value=True)
+    _drop_flag("--dev", takes_value=False)
+
+    # Older versions supported `mindex ui --init-only` as a shortcut for init-config.
+    if "--init-only" in args:
+        warnings.append("treating legacy `--init-only` as `init-config`")
+        args = [token for token in args if token != "--init-only"]
+        if not args or args[0].startswith("-"):
+            args = ["init-config", *args]
+        elif args[0] not in {"install", "init-config", "reset-config", "serve", "broker"}:
+            args = ["init-config", *args]
+
+    return args, warnings
 
 
 def load_config(*, env: dict[str, str] | None = None) -> CodoxearConfig:
@@ -302,6 +366,9 @@ def _init_or_reset_config(
     url_prefix = _normalize_url_prefix(args.url_prefix)
     _assert_bind_is_allowed(args.host, allow_remote=args.allow_remote)
 
+    if args.password:
+        # Even though we redact logs, avoid encouraging plaintext secrets in shell history.
+        print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
     password = args.password or _prompt_password(label="Codoxear UI password")
     payload = _build_config_payload(
         config_path=config_path,
@@ -334,6 +401,8 @@ def _serve(argv: list[str], *, env: dict[str, str] | None, invoked_as: str) -> i
             "codoxear-server not found. Run `mindex codoxear install` first (installs into ~/.mindex/codoxear/venv)."
         )
 
+    if args.password:
+        print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
     password = args.password or _prompt_password(label="Codoxear UI password")
     if not args.no_verify:
         if not _verify_password(
@@ -383,10 +452,15 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
     if invoked_as == "ui":
         # Keep backwards compatibility for older workflows, but shift everything
         # to Codoxear since the in-tree Mindex UI has been removed.
-        if args and args[0] in {"init-config", "reset-config", "serve", "install"}:
+        args, legacy_warnings = _normalize_legacy_ui_args(args)
+        for warning in legacy_warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        if args and args[0] in {"init-config", "reset-config", "serve", "install", "broker"}:
             pass
         elif args:
-            raise SystemExit("mindex ui now proxies to Codoxear. Use: mindex ui serve | init-config | reset-config")
+            raise SystemExit(
+                "mindex ui now proxies to Codoxear. Use: mindex ui serve|init-config|reset-config|install|broker"
+            )
         else:
             args = ["serve"]
 
@@ -397,10 +471,11 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
     tail = args[1:]
 
     logs_root = default_managed_logs_root()
+    sanitized_args = _sanitize_argv_for_logging(args)
     log_run = create_log_run(
         logs_root,
         f"{invoked_as} {sub}",
-        prompt_text=f"mindex {invoked_as} {' '.join(args)}",
+        prompt_text=f"mindex {invoked_as} {' '.join(sanitized_args)}",
         metadata={"invoked_as": invoked_as, "subcommand": sub},
     )
 

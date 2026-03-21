@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
+from unittest import mock
 
 from mindex import codoxear
 
@@ -57,6 +62,9 @@ class CodoxearConfigTests(unittest.TestCase):
                     iterations=loaded.password_iterations,
                 )
             )
+            if os.name == "posix":
+                mode = stat.S_IMODE(config_path.stat().st_mode)
+                self.assertEqual(mode, 0o600)
 
     def test_build_server_env(self) -> None:
         config = codoxear.CodoxearConfig(
@@ -89,6 +97,152 @@ class CodoxearConfigTests(unittest.TestCase):
             found = codoxear._find_codoxear_broker(env={"MINDEX_CODOXEAR_VENV_DIR": str(venv_dir)})
             self.assertEqual(found, str(broker))
 
+    def test_sanitize_argv_redacts_password(self) -> None:
+        argv = ["serve", "--password", "sekret", "--password=sekret2", "--no-verify"]
+        sanitized = codoxear._sanitize_argv_for_logging(argv)
+        self.assertNotIn("sekret", sanitized)
+        self.assertNotIn("sekret2", sanitized)
+        self.assertIn("--password", sanitized)
+
+    def test_ui_legacy_args_are_ignored_or_mapped(self) -> None:
+        args, warnings = codoxear._normalize_legacy_ui_args(
+            ["--init-only", "--project-root", "/tmp/project", "--dev", "--password", "pw"]
+        )
+        self.assertIn("init-config", args[0:1])
+        self.assertNotIn("--project-root", args)
+        self.assertNotIn("--dev", args)
+        self.assertTrue(any("init-only" in w for w in warnings))
+
+    def test_serve_exports_expected_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            venv_dir = tmp_path / "venv"
+            server_bin = venv_dir / "bin" / "codoxear-server"
+            server_bin.parent.mkdir(parents=True, exist_ok=True)
+
+            capture = tmp_path / "capture.json"
+            server_bin.write_text(
+                """#!/usr/bin/env python3
+import json, os, pathlib
+path = os.environ.get("MINDEX_TEST_CAPTURE_PATH")
+if path:
+    keys = ["CODEX_WEB_PASSWORD", "CODEX_WEB_HOST", "CODEX_WEB_PORT", "CODEX_WEB_URL_PREFIX", "CODEX_HOME", "CODEX_BIN"]
+    data = {k: os.environ.get(k) for k in keys}
+    pathlib.Path(path).write_text(json.dumps(data), encoding="utf-8")
+""",
+                encoding="utf-8",
+            )
+            server_bin.chmod(0o755)
+
+            config_path = tmp_path / "config.json"
+            codoxear._write_private_json(
+                config_path,
+                {
+                    "auth": {
+                        "password_hash": "x",
+                        "password_salt": "00",
+                        "password_iterations": codoxear.PASSWORD_ITERATIONS,
+                    },
+                    "server": {
+                        "host": "127.0.0.1",
+                        "port": 9999,
+                        "url_prefix": "/x",
+                        "allow_remote": False,
+                    },
+                    "codex": {
+                        "home": "/tmp/codex-home",
+                        "bin": "mindex",
+                    },
+                },
+            )
+
+            env = {
+                "MINDEX_CODOXEAR_CONFIG_PATH": str(config_path),
+                "MINDEX_CODOXEAR_VENV_DIR": str(venv_dir),
+                "MINDEX_TEST_CAPTURE_PATH": str(capture),
+            }
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with mock.patch.dict(os.environ, env, clear=False):
+                    rc = codoxear.main(["serve", "--password", "pw", "--no-verify"], invoked_as="codoxear")
+            self.assertEqual(rc, 0)
+            payload = json.loads(capture.read_text(encoding="utf-8"))
+            self.assertEqual(payload["CODEX_WEB_PASSWORD"], "pw")
+            self.assertEqual(payload["CODEX_WEB_HOST"], "127.0.0.1")
+            self.assertEqual(payload["CODEX_WEB_PORT"], "9999")
+            self.assertEqual(payload["CODEX_WEB_URL_PREFIX"], "/x")
+            self.assertEqual(payload["CODEX_HOME"], "/tmp/codex-home")
+            self.assertEqual(payload["CODEX_BIN"], "mindex")
+
+    def test_broker_passes_codex_env_and_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            venv_dir = tmp_path / "venv"
+            broker_bin = venv_dir / "bin" / "codoxear-broker"
+            broker_bin.parent.mkdir(parents=True, exist_ok=True)
+
+            capture = tmp_path / "broker.txt"
+            broker_bin.write_text(
+                """#!/usr/bin/env python3
+import os, pathlib, sys
+path = os.environ.get("MINDEX_TEST_CAPTURE_PATH")
+if path:
+    msg = []
+    msg.append("argv=" + " ".join(sys.argv[1:]))
+    msg.append("CODEX_HOME=" + str(os.environ.get("CODEX_HOME")))
+    msg.append("CODEX_BIN=" + str(os.environ.get("CODEX_BIN")))
+    pathlib.Path(path).write_text("\\n".join(msg), encoding="utf-8")
+""",
+                encoding="utf-8",
+            )
+            broker_bin.chmod(0o755)
+
+            config_path = tmp_path / "config.json"
+            codoxear._write_private_json(
+                config_path,
+                {
+                    "auth": {
+                        "password_hash": "x",
+                        "password_salt": "00",
+                        "password_iterations": codoxear.PASSWORD_ITERATIONS,
+                    },
+                    "server": {"host": "127.0.0.1", "port": 8743, "url_prefix": "", "allow_remote": False},
+                    "codex": {"home": "/tmp/codex-home-broker", "bin": "mindex"},
+                },
+            )
+
+            env = {
+                "MINDEX_CODOXEAR_CONFIG_PATH": str(config_path),
+                "MINDEX_CODOXEAR_VENV_DIR": str(venv_dir),
+                "MINDEX_TEST_CAPTURE_PATH": str(capture),
+            }
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with mock.patch.dict(os.environ, env, clear=False):
+                    rc = codoxear.main(["broker", "--", "/new"], invoked_as="codoxear")
+            self.assertEqual(rc, 0)
+            text = capture.read_text(encoding="utf-8")
+            self.assertIn("argv=-- /new", text)
+            self.assertIn("CODEX_HOME=/tmp/codex-home-broker", text)
+            self.assertIn("CODEX_BIN=mindex", text)
+
+    def test_password_is_not_logged_in_prompt_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            logs_root = tmp_path / "logs"
+            config_path = tmp_path / "config.json"
+
+            env = {
+                "MINDEX_LOGS_ROOT": str(logs_root),
+                "MINDEX_CODOXEAR_CONFIG_PATH": str(config_path),
+            }
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with mock.patch.dict(os.environ, env, clear=False):
+                    rc = codoxear.main(["init-config", "--password", "sekret"], invoked_as="codoxear")
+            self.assertEqual(rc, 0)
+            prompt_files = list(logs_root.rglob("prompt.txt"))
+            self.assertTrue(prompt_files)
+            combined = "\\n".join(p.read_text(encoding="utf-8") for p in prompt_files)
+            self.assertNotIn("sekret", combined)
+            self.assertIn("****", combined)
 
 if __name__ == "__main__":
     unittest.main()

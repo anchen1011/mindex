@@ -217,19 +217,39 @@ Mindex no longer ships an in-tree UI implementation. Instead, it integrates
 with Codoxear, an external lightweight web UI designed for continuing the same
 live Codex TUI session from a phone or browser.
 
-Current commands:
+Quick start (copy/paste):
 
-- `mindex codoxear install`
-- `mindex codoxear init-config`
-- `mindex codoxear reset-config`
-- `mindex codoxear serve`
-- `mindex codoxear broker -- <codex args>`
-- `mindex ui ...` is kept as a compatibility alias for `mindex codoxear ...`
+```bash
+mindex codoxear install
+mindex codoxear init-config
+mindex codoxear serve
+```
+
+Then open (local machine):
+
+- `http://127.0.0.1:8743/`
+
+If you configured a URL prefix (example: `--url-prefix /codoxear`), open:
+
+- `http://127.0.0.1:8743/codoxear/`
+
+Commands:
+
+- Install: `mindex codoxear install`
+- Configure: `mindex codoxear init-config` (first-time) / `mindex codoxear reset-config` (rotate password/settings)
+- Run UI: `mindex codoxear serve`
+- Register terminal-owned sessions: `mindex codoxear broker -- <codex args>`
+- Compatibility alias: `mindex ui ...` forwards to `mindex codoxear ...`
 
 Implemented behavior:
 
-- stores Codoxear configuration under `~/.mindex/codoxear/config.json` (or
-  `MINDEX_CODOXEAR_CONFIG_PATH`), not inside a repository
+- installs Codoxear into an isolated venv at `~/.mindex/codoxear/venv` (no
+  reliance on system `pip`)
+- pins Codoxear to a known-good commit by default for reproducible installs
+  (override with `mindex codoxear install --source <pip-target>` if you want
+  to track upstream)
+- stores configuration under `~/.mindex/codoxear/config.json` (or
+  `MINDEX_CODOXEAR_CONFIG_PATH`), not inside any repository
 - never stores the Codoxear password in plaintext; only a salted PBKDF2 hash is
   persisted
 - prompts for the password at serve time (or accepts `--password`) and then
@@ -239,6 +259,8 @@ Implemented behavior:
   `0.0.0.0` / `::` unless `allow_remote=true` is explicitly configured
 - defaults `CODEX_BIN` to `mindex` so Codoxear-launched sessions inherit
   Mindex-managed behavior by default
+- redacts `--password ...` values from Mindex logs (still avoid using
+  `--password` if shell history is a concern)
 
 Usage notes:
 
@@ -255,6 +277,14 @@ Usage notes:
 
   By default, Mindex config sets `CODEX_BIN=mindex` so brokered sessions also
   launch through Mindex.
+
+Remote access (explicit opt-in):
+
+- Update config to bind publicly (unsafe unless you add a secure transport):
+
+  ```bash
+  mindex codoxear reset-config --allow-remote --host 0.0.0.0
+  ```
 
 Security warning:
 
