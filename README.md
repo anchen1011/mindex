@@ -177,6 +177,138 @@ Current implementation:
 - the managed instructions describe Mindex as a Codex wrapper and enforce the
   repository's branch, fork, and PR protocol
 
+### 3.5. `mindex container` (opt-in container mode)
+
+Mindex also supports an opt-in container mode that runs the Mindex/Codex
+workflow inside a per-project Docker container.
+
+Why this exists:
+
+- **Independent env:** dependencies live inside the container image.
+- **Independent Mindex/Codex state:** each project container has its own
+  `/root/.mindex` and `/root/.codex` (Docker volumes), so multiple containers
+  can run side-by-side without sharing state.
+- **Some shared folders:** a small, explicit allowlist of host paths is bind
+  mounted into the container (default: host `~/shared` -> container `/shared`).
+- **Careful port mapping:** a small, predeclared set of container ports is
+  published to the host so you can test services from outside the container.
+
+Beginner quick start:
+
+1. Install Mindex locally.
+2. Install Docker and make sure `docker info` works.
+3. In your project directory, run:
+   - `mindex container build`
+   - `mindex container`
+4. Mindex will:
+   - build the image if needed
+   - create a per-project container if needed
+   - print the host/container port mappings
+   - enter that container
+   - immediately start `mindex` inside the container
+5. After the `mindex` session exits, you stay in the container shell.
+
+Main commands:
+
+- `mindex container` - ensure the project's container exists, show port mappings,
+  then enter the container, launch `mindex`, and keep a shell open afterwards.
+- `mindex container shell` - just enter the container shell.
+- `mindex container ports` - print `container_port -> host_port` mappings.
+- `mindex container stop` - stop the container.
+- `mindex container build` - build the container image used by container mode.
+
+Configuration:
+
+Container mode reads `~/.mindex/config.json` (created on first use). The most
+important knobs are:
+
+- `container.enabled_by_default` (default: `false`)
+  - when set to `true`, running bare `mindex` (with no args) will behave like
+    `mindex container` on the host.
+- `container.shared_folders` (default: `~/shared` -> `/shared`)
+  - additional mounts can be added explicitly; by default, other host paths are
+    not shared into the container.
+- `container.port_mapping`
+  - `mode: "block"` (default) publishes container ports to a contiguous block
+    on `127.0.0.1` chosen from `host_port_range_start..host_port_range_end`.
+    On conflicts, Mindex retries with a different block.
+  - `mode: "docker-random"` lets Docker pick random host ports per container
+    port (lowest collision risk, less predictable).
+  - `mode: "static"` requires `static_host_ports` to map each container port to
+    a fixed host port.
+
+Example config:
+
+```json
+{
+  "container": {
+    "enabled_by_default": false,
+    "image": {
+      "name": "mindex-container",
+      "tag": "latest"
+    },
+    "shared_folders": [
+      {
+        "host": "~/shared",
+        "container": "/shared",
+        "read_only": false
+      }
+    ],
+    "port_mapping": {
+      "mode": "block",
+      "host_ip": "127.0.0.1",
+      "container_port_range_start": 3000,
+      "container_port_count": 10,
+      "extra_container_ports": [8765],
+      "host_port_base": null,
+      "host_port_range_start": 41000,
+      "host_port_range_end": 49000,
+      "static_host_ports": {}
+    }
+  }
+}
+```
+
+Default published ports:
+
+- container `3000..3009` (10 ports) for local dev servers
+- container `8765` for `mindex ui` (default UI port)
+
+How port mapping works:
+
+- In default `block` mode, Mindex publishes a small contiguous block of host
+  ports for each container.
+- Example: if the chosen host block starts at `41230`, then container port
+  `3000` maps to host `41230`, `3001` maps to `41231`, and so on.
+- If that block is already taken, Mindex retries with another block.
+- This gives predictable local testing without blindly exposing hundreds of
+  ports and causing collisions when several containers run at once.
+- By default, ports bind only to `127.0.0.1`, so they are reachable from the
+  local machine but not exposed on all network interfaces.
+
+Testing a web app from outside the container:
+
+1. Start your app inside the container on one of the published container ports,
+   such as `3000`.
+2. Run `mindex container ports`.
+3. If it prints `3000 -> 41230`, open `http://127.0.0.1:41230` on the host.
+
+Operational notes:
+
+- By default, published ports bind only to `127.0.0.1` for safety.
+- Credentials (SSH keys, git config, tokens) are intentionally not copied into
+  the image; mount them explicitly via `container.shared_folders` if needed.
+- The host project directory is mounted into the container at `/workspace`.
+- Shared folders are explicit. By default, only `~/shared` is shared; other
+  host paths are not mounted into the container unless you add them in config.
+- Real Docker tests in this repository cover:
+  - isolated per-container state
+  - shared folder access
+  - external web-app access through mapped ports
+  - dynamic block allocation across multiple containers
+  - block-mode retry on host port conflicts
+  - static port mappings
+
 ### 4. Repo skill under `mindex/`
 
 Mindex now includes an initial `repo` skill under `mindex/` for working on this
@@ -215,6 +347,7 @@ live session queues and their visible transcripts.
 
 Current commands:
 
+- `mindex-ui-setup`
 - `mindex ui init-config --project-root <root>`
 - `mindex ui reset-config --project-root <root>`
 - `mindex ui serve --project-root <root>`
@@ -222,6 +355,9 @@ Current commands:
 
 Implemented behavior:
 
+- `mindex-ui-setup` gives a beginner-friendly one-shot setup path that creates
+  the local UI config for the detected project and prints the next step
+  (`mindex ui serve`)
 - creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
   hash instead of storing a plaintext password
 - keeps the default UI username as `admin` and prompts `mindex ui init-config`

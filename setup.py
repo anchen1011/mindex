@@ -78,8 +78,8 @@ setup(
     license="MIT",
     packages=find_packages(),
     include_package_data=True,
-    package_data={"mindex": ["assets/skills/*/SKILL.md"]},
+    package_data={"mindex": ["assets/skills/*/SKILL.md", "assets/container/Dockerfile"]},
     python_requires=">=3.9",
-    entry_points={"console_scripts": ["mindex=mindex.cli:main"]},
+    entry_points={"console_scripts": ["mindex=mindex.cli:main", "mindex-ui-setup=mindex.ui_setup:main"]},
     cmdclass=cmdclass,
 )

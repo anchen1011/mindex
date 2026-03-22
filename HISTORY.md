@@ -161,6 +161,28 @@
   execution unless the user explicitly provides different approval or sandbox
   settings for the run.
 
+#### 8. Container Mode
+
+- Status: in progress
+- Add an opt-in `mindex container` mode that runs Mindex/Codex inside a
+  per-project Docker container.
+- Provide independent per-container Mindex/Codex state (`/root/.mindex`,
+  `/root/.codex`) via Docker volumes.
+- Support explicit shared folder mounts configured in `~/.mindex/config.json`,
+  with default host `~/shared` mounted into the container as `/shared`.
+- Implement a careful port publishing strategy that exposes a small set of
+  container ports for external testing while avoiding multi-container
+  collisions (default: contiguous host port block allocation with retries).
+- Add both fake-Docker integration tests and real-Docker integration tests for
+  isolation, shared folders, port reachability, dynamic allocation, retry on
+  conflicts, and static mappings.
+
+#### 9. UI Setup Shortcut
+
+- Status: in progress
+- Add a beginner-friendly `mindex-ui-setup` command that prepares the local UI
+  config and prints the next step for launching the browser UI.
+
 ### Notes
 
 - This file is being maintained as the current project history and requirement
