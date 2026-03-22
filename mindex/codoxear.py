@@ -19,7 +19,7 @@ from mindex.logging_utils import append_action, create_log_run, record_validatio
 
 
 PASSWORD_ITERATIONS = 390000
-DEFAULT_HOST_LOCAL = "127.0.0.1"
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8743
 DEFAULT_CODEX_BIN = "mindex"
 # Pin to a known-good commit by default for reproducible installs.
@@ -86,6 +86,11 @@ def _default_venv_dir(env: dict[str, str] | None = None) -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return (Path.home() / ".mindex" / "codoxear" / "venv").resolve()
+
+
+def _host_implies_remote(host: str) -> bool:
+    normalized = host.strip().lower()
+    return normalized in {"0.0.0.0", "::", "[::]"} or not _is_loopback_host(normalized)
 
 
 def _normalize_url_prefix(value: str) -> str:
@@ -215,11 +220,17 @@ def load_config(*, env: dict[str, str] | None = None) -> CodoxearConfig:
     auth = payload.get("auth") or {}
     server = payload.get("server") or {}
     codex = payload.get("codex") or {}
+    resolved_host = str(server.get("host") or DEFAULT_HOST)
+    resolved_allow_remote = (
+        bool(server["allow_remote"])
+        if "allow_remote" in server
+        else _host_implies_remote(resolved_host)
+    )
     return CodoxearConfig(
-        host=str(server.get("host") or DEFAULT_HOST_LOCAL),
+        host=resolved_host,
         port=int(server.get("port") or DEFAULT_PORT),
         url_prefix=str(server.get("url_prefix") or ""),
-        allow_remote=bool(server.get("allow_remote") or False),
+        allow_remote=resolved_allow_remote,
         password_hash=str(auth.get("password_hash") or ""),
         password_salt=str(auth.get("password_salt") or ""),
         password_iterations=int(auth.get("password_iterations") or PASSWORD_ITERATIONS),
@@ -265,13 +276,22 @@ def _find_codoxear_broker(*, env: dict[str, str] | None = None) -> str | None:
 
 
 def _add_shared_config_args(parser: argparse.ArgumentParser, *, include_password_help: str) -> None:
-    parser.add_argument("--host", default=DEFAULT_HOST_LOCAL)
+    parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--url-prefix", default="")
-    parser.add_argument("--allow-remote", action="store_true", default=False)
+    remote_group = parser.add_mutually_exclusive_group()
+    remote_group.add_argument("--allow-remote", dest="allow_remote", action="store_true")
+    remote_group.add_argument("--local-only", dest="allow_remote", action="store_false")
+    parser.set_defaults(allow_remote=None)
     parser.add_argument("--password", default="", help=include_password_help)
     parser.add_argument("--codex-home", default=str(default_managed_codex_home()))
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
+
+
+def _resolve_allow_remote_argument(host: str, allow_remote: bool | None) -> bool:
+    if allow_remote is not None:
+        return allow_remote
+    return _host_implies_remote(host)
 
 
 def _write_config_from_args(
@@ -425,13 +445,14 @@ def _init_or_reset_config(
         # Even though we redact logs, avoid encouraging plaintext secrets in shell history.
         print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
     password = args.password or _prompt_password(label="Codoxear UI password")
+    resolved_allow_remote = _resolve_allow_remote_argument(args.host, args.allow_remote)
     config_path = _write_config_from_args(
         env=env,
         overwrite=overwrite,
         host=args.host,
         port=args.port,
         url_prefix=args.url_prefix,
-        allow_remote=args.allow_remote,
+        allow_remote=resolved_allow_remote,
         password=password,
         codex_home=args.codex_home,
         codex_bin=args.codex_bin,
@@ -481,13 +502,14 @@ def _setup(argv: list[str], *, env: dict[str, str] | None, invoked_as: str, log_
         if args.password:
             print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
         password = args.password or _prompt_password(label="Codoxear UI password")
+        resolved_allow_remote = _resolve_allow_remote_argument(args.host, args.allow_remote)
         config_path = _write_config_from_args(
             env=env,
             overwrite=True,
             host=args.host,
             port=args.port,
             url_prefix=args.url_prefix,
-            allow_remote=args.allow_remote,
+            allow_remote=resolved_allow_remote,
             password=password,
             codex_home=args.codex_home,
             codex_bin=args.codex_bin,

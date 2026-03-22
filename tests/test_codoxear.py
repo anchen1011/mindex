@@ -30,6 +30,12 @@ class CodoxearConfigTests(unittest.TestCase):
             codoxear._assert_bind_is_allowed("::", allow_remote=False)
         codoxear._assert_bind_is_allowed("0.0.0.0", allow_remote=True)
 
+    def test_allow_remote_defaults_follow_host(self) -> None:
+        self.assertTrue(codoxear._resolve_allow_remote_argument("0.0.0.0", None))
+        self.assertTrue(codoxear._resolve_allow_remote_argument("192.168.1.10", None))
+        self.assertFalse(codoxear._resolve_allow_remote_argument("127.0.0.1", None))
+        self.assertFalse(codoxear._resolve_allow_remote_argument("localhost", None))
+
     def test_init_writes_hash_no_plaintext_and_verifies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "codoxear.json"
@@ -38,10 +44,10 @@ class CodoxearConfigTests(unittest.TestCase):
             password = "abc123"
             payload = codoxear._build_config_payload(
                 config_path=config_path,
-                host="127.0.0.1",
+                host="0.0.0.0",
                 port=8743,
                 url_prefix="",
-                allow_remote=False,
+                allow_remote=True,
                 password=password,
                 codex_home=str(Path(tmp) / "codex-home"),
                 codex_bin="mindex",
@@ -68,10 +74,10 @@ class CodoxearConfigTests(unittest.TestCase):
 
     def test_build_server_env(self) -> None:
         config = codoxear.CodoxearConfig(
-            host="127.0.0.1",
+            host="0.0.0.0",
             port=8743,
             url_prefix="/codoxear",
-            allow_remote=False,
+            allow_remote=True,
             password_hash="",
             password_salt="",
             password_iterations=codoxear.PASSWORD_ITERATIONS,
@@ -81,11 +87,33 @@ class CodoxearConfigTests(unittest.TestCase):
         )
         env = codoxear._build_server_env(config, password="pw")
         self.assertEqual(env["CODEX_WEB_PASSWORD"], "pw")
-        self.assertEqual(env["CODEX_WEB_HOST"], "127.0.0.1")
+        self.assertEqual(env["CODEX_WEB_HOST"], "0.0.0.0")
         self.assertEqual(env["CODEX_WEB_PORT"], "8743")
         self.assertEqual(env["CODEX_WEB_URL_PREFIX"], "/codoxear")
         self.assertEqual(env["CODEX_HOME"], "/tmp/codex-home")
         self.assertEqual(env["CODEX_BIN"], "mindex")
+
+    def test_load_config_defaults_remote_for_wildcard_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            codoxear._write_private_json(
+                config_path,
+                {
+                    "auth": {
+                        "password_hash": "x",
+                        "password_salt": "00",
+                        "password_iterations": codoxear.PASSWORD_ITERATIONS,
+                    },
+                    "server": {
+                        "host": "0.0.0.0",
+                        "port": 8743,
+                        "url_prefix": "",
+                    },
+                    "codex": {"home": "/tmp/codex-home", "bin": "mindex"},
+                },
+            )
+            loaded = codoxear.load_config(env={"MINDEX_CODOXEAR_CONFIG_PATH": str(config_path)})
+            self.assertTrue(loaded.allow_remote)
 
     def test_find_broker_prefers_mindex_venv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,10 +172,10 @@ if path:
                         "password_iterations": codoxear.PASSWORD_ITERATIONS,
                     },
                     "server": {
-                        "host": "127.0.0.1",
+                        "host": "0.0.0.0",
                         "port": 9999,
                         "url_prefix": "/x",
-                        "allow_remote": False,
+                        "allow_remote": True,
                     },
                     "codex": {
                         "home": "/tmp/codex-home",
@@ -167,7 +195,7 @@ if path:
             self.assertEqual(rc, 0)
             payload = json.loads(capture.read_text(encoding="utf-8"))
             self.assertEqual(payload["CODEX_WEB_PASSWORD"], "pw")
-            self.assertEqual(payload["CODEX_WEB_HOST"], "127.0.0.1")
+            self.assertEqual(payload["CODEX_WEB_HOST"], "0.0.0.0")
             self.assertEqual(payload["CODEX_WEB_PORT"], "9999")
             self.assertEqual(payload["CODEX_WEB_URL_PREFIX"], "/x")
             self.assertEqual(payload["CODEX_HOME"], "/tmp/codex-home")
@@ -205,7 +233,7 @@ if path:
                         "password_salt": "00",
                         "password_iterations": codoxear.PASSWORD_ITERATIONS,
                     },
-                    "server": {"host": "127.0.0.1", "port": 8743, "url_prefix": "", "allow_remote": False},
+                    "server": {"host": "0.0.0.0", "port": 8743, "url_prefix": "", "allow_remote": True},
                     "codex": {"home": "/tmp/codex-home-broker", "bin": "mindex"},
                 },
             )
@@ -274,10 +302,10 @@ if path:
             config_path = tmp_path / "config.json"
             original = codoxear._build_config_payload(
                 config_path=config_path,
-                host="127.0.0.1",
+                host="0.0.0.0",
                 port=8743,
                 url_prefix="",
-                allow_remote=False,
+                allow_remote=True,
                 password="first",
                 codex_home="/tmp/codex-home",
                 codex_bin="mindex",
@@ -293,6 +321,23 @@ if path:
             self.assertEqual(rc, 0)
             self.assertIn("keeping it unchanged", stdout.getvalue())
             prompt_password.assert_not_called()
+
+    def test_setup_can_force_local_only_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            env = {"MINDEX_CODOXEAR_CONFIG_PATH": str(config_path)}
+            with mock.patch("mindex.codoxear._run_install", return_value=0):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    with mock.patch.dict(os.environ, env, clear=False):
+                        rc = codoxear.main(
+                            ["setup", "--reset-config", "--host", "127.0.0.1", "--local-only", "--password", "sekret"],
+                            invoked_as="ui",
+                        )
+            self.assertEqual(rc, 0)
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["server"]["host"], "127.0.0.1")
+            self.assertFalse(payload["server"]["allow_remote"])
 
     def test_setup_can_serve_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

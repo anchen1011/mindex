@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+from importlib import import_module
 import sys
 from typing import Iterable
 
 from mindex import __version__
 from mindex.codoxear import main as codoxear_main
-from mindex.configure import main as configure_main
-from mindex.github_workflow import main as github_workflow_main
 from mindex.launcher import find_project_root, launch_codex
 
 
@@ -19,8 +18,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(__version__)
         return 0
     if args[0] == "configure":
+        configure_main = import_module("mindex.configure").main
         return configure_main(args)
     if args[0] == "publish-pr":
+        github_workflow_main = import_module("mindex.github_workflow").main
         publish_args = list(args[1:])
         if "--project-root" not in publish_args:
             publish_args.extend(["--project-root", str(project_root)])
