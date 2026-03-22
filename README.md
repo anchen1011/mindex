@@ -13,9 +13,36 @@ future tasks across projects launched through `mindex`.
 
 There are two simple setup paths:
 
-1. **Local install:** Clone the repository, then run `pip install -e .`
+1. **Local install:** Clone the repository, then run `python3 -m pip install -e .`
 2. **Codex install:** Open Codex and send:
    `Use https://github.com/anchen1011/mindex configure skill to install and configure codex.`
+
+## Fastest UI Setup
+
+If you only care about the browser UI, this is the shortest path:
+
+```bash
+mindex ui setup
+mindex ui serve
+```
+
+What happens:
+
+1. `mindex ui setup`
+   - installs Codoxear into `~/.mindex/codoxear/venv`
+   - creates a secure config at `~/.mindex/codoxear/config.json`
+   - prompts you for the UI password without saving it in plaintext
+2. `mindex ui serve`
+   - starts the UI on `http://127.0.0.1:8743/`
+   - asks for the password again so the plaintext password never needs to be stored in the config file
+
+If you prefer a single executable, Mindex also installs:
+
+```bash
+mindex-ui-setup
+```
+
+That command is just a shortcut for `mindex ui setup`.
 
 ## Project Highlights
 
@@ -26,8 +53,27 @@ There are two simple setup paths:
    validation results under `logs/` for better observability.
 3. **Automatic commits and PRs:** Mindex defaults to feature-branch
    publication so changes are easier to trace, review, and control.
-4. **Live session queue UI:** Mindex includes a local UI for managing simple
-   live sessions, per-session queues, and visible transcripts.
+4. **Codoxear UI integration:** Mindex can launch Codoxear's mobile-friendly UI
+   for Codex sessions while keeping Mindex-managed settings and avoiding
+   plaintext password storage.
+
+## How Mindex, Codex, and RTK fit together
+
+- `mindex` is a wrapper around Codex. It does not replace the Codex model.
+- `mindex` launches Codex with a separate managed home at
+  `~/.mindex/codex-home`.
+- plain `codex` stays vanilla by default and does not automatically inherit the
+  Mindex-managed setup.
+- when `rtk` is installed, `mindex configure` and the `mindex` launcher both
+  ensure RTK is initialized inside that managed Codex home, so `mindex`
+  sessions default to RTK-aware shell usage.
+- if `rtk` is not installed yet, Mindex still runs, but RTK-specific behavior
+  cannot activate until `rtk` is installed.
+
+In short:
+
+- use `mindex` when you want Mindex rules plus RTK-by-default behavior
+- use plain `codex` when you want the untouched vanilla Codex workflow
 
 Next, we will keep improving the Harness with a strong focus on **security**,
 **testing**, and **memory**.
@@ -40,8 +86,8 @@ The repository currently includes:
 - structured local task logs under `logs/`
 - a documented testing-first and PR-first workflow
 - an open GitHub PR workflow for AI-generated changes
-- a secure local web UI for managing live sessions, queue order, and session
-  transcripts
+- a Codoxear-based UI workflow for mobile-friendly session handoff (with
+  Mindex-managed config and safer secret handling)
 
 The repository now has an initial implementation for the core runtime features
 below, with additional hardening and integration work still in progress.
@@ -61,7 +107,8 @@ Current commands:
 
 Implemented behavior:
 
-- installing Mindex with `pip install .` or `pip install -e .` installs the
+- installing Mindex with `python3 -m pip install .` or
+  `python3 -m pip install -e .` installs the
   `mindex` command and runs Mindex auto-configure by default unless
   `MINDEX_SKIP_AUTO_CONFIGURE=1`
 - that install flow turns `mindex` into the Mindex-enhanced Codex entry point
@@ -79,21 +126,27 @@ Implemented behavior:
 - symlinks packaged skills back to the source tree when possible so editable
   installs pick up skill edits from the repo immediately
 - writes a managed `[profiles.mindex]` block into the Codex config file
+- makes the managed `mindex` profile default to YOLO execution with
+  `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
+- when `rtk` is installed, runs `rtk init --codex` inside the managed
+  `~/.mindex/codex-home` so `mindex`-launched Codex sessions default to RTK
+  instructions
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
-- prepares dependency installation commands for Miniconda, NPM, Tmux, and
-  Codex
+- prepares dependency installation commands for Miniconda, NPM, Tmux, Codex,
+  and RTK
 - records configure runs under `logs/`
 
 Target workflows:
 
 - **New installation**
-  - support `pip install .` and `pip install -e .`
+  - support `python3 -m pip install .` and `python3 -m pip install -e .`
   - install Mindex so the `mindex` command is ready as the enhanced Codex entry
     point across projects
   - allow `mindex configure` to be run globally without a project argument
   - keep the original `codex` command available in its normal vanilla state
-  - install required dependencies, including Miniconda, Codex, NPM, and Tmux
+  - install required dependencies, including Miniconda, Codex, NPM, Tmux, and
+    RTK
 
 - **Existing Codex workflow**
   - allow a user who already has Codex installed to ask Codex to configure
@@ -150,6 +203,9 @@ Current implementation:
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
   `~/.mindex/codex-home` by default
+- `mindex` ensures the managed Codex home contains RTK Codex instructions when
+  the `rtk` binary is available, so `mindex` sessions default to RTK-aware
+  shell command usage
 - `mindex` also defaults Codex launches into YOLO mode by prepending
   `--dangerously-bypass-approvals-and-sandbox` unless the user already
   supplied explicit approval or sandbox flags for that run
@@ -165,7 +221,8 @@ Current implementation:
 - other `mindex ...` invocations proxy to `codex` from the detected workspace
   root
 - plain `codex` still exists as the unchanged vanilla command outside the
-  Mindex-managed workflow
+  Mindex-managed workflow, including RTK, unless the user configures vanilla
+  Codex separately
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch
@@ -340,80 +397,158 @@ Implemented behavior:
 - records publication metadata, command output, and PR verification details
   under `logs/`
 
-### 6. Secure web UI
+### 6. Codoxear UI (recommended)
 
-Mindex now includes a browser-accessible control surface for managing queued
-live session queues and their visible transcripts.
+Mindex no longer ships an in-tree UI implementation. Instead, it integrates
+with Codoxear, an external lightweight web UI designed for continuing the same
+live Codex TUI session from a phone or browser.
 
-Current commands:
+If you are a new user, you can treat this as a 3-step workflow:
 
-- `mindex-ui-setup`
-- `mindex ui init-config --project-root <root>`
-- `mindex ui reset-config --project-root <root>`
-- `mindex ui serve --project-root <root>`
-- `mindex ui serve --project-root <root> --dev`
+```bash
+mindex ui setup
+mindex ui serve
+```
+
+Then open:
+
+- `http://127.0.0.1:8743/`
+
+If you configured a URL prefix such as `--url-prefix /codoxear`, open:
+
+- `http://127.0.0.1:8743/codoxear/`
+
+What `mindex ui setup` does:
+
+1. installs Codoxear into an isolated venv under `~/.mindex/codoxear/venv`
+2. creates a config at `~/.mindex/codoxear/config.json` if you do not already
+   have one
+3. prompts you for a password and stores only a salted PBKDF2 hash, never the
+   plaintext password
+4. if a config already exists, keeps it unchanged by default
+5. prints the exact browser URL and follow-up commands you need
+
+If you want to rotate the password or replace the existing settings, use:
+
+```bash
+mindex ui setup --reset-config
+```
+
+What `mindex ui serve` does:
+
+1. loads the secure config
+2. asks for the password again, unless you explicitly pass `--password`
+3. verifies that password against the stored salted hash
+4. starts Codoxear with the right environment variables for Mindex
+
+Most important commands:
+
+- First-time setup: `mindex ui setup`
+- Start the UI later: `mindex ui serve`
+- Change password or rotate settings: `mindex ui reset-config`
+- Register a terminal-owned Codex session: `mindex ui broker -- <codex args>`
+- Low-level commands are also available under `mindex codoxear ...`
+- Shortcut executable: `mindex-ui-setup`
 
 Implemented behavior:
 
-- `mindex-ui-setup` gives a beginner-friendly one-shot setup path that creates
-  the local UI config for the detected project and prints the next step
-  (`mindex ui serve`)
-- creates or migrates `.mindex/ui_config.json` with a salted PBKDF2 password
-  hash instead of storing a plaintext password
-- keeps the default UI username as `admin` and prompts `mindex ui init-config`
-  for the password when `--password` is not supplied
-- lets `mindex ui reset-config` rewrite `.mindex/ui_config.json` from scratch
-  with fresh credentials, session secrets, and localhost-first server defaults
-- defaults the server to `127.0.0.1` and requires an explicit
-  `allow_remote=true` config choice before binding to non-localhost interfaces
-- when remote binding is enabled, automatically allows browser origins for the
-  configured port across localhost, loopback IPv6, and discovered machine
-  hostnames/IPs while still honoring explicit `allowed_origins` entries for
-  custom aliases
-- serves a simpler session-first browser view where each session owns one
-  editable queue, supports drag-to-reorder queue items, and shows its
-  transcript inline
-- lets a new session be created from just its name and workdir, immediately
-  starting a live shell-backed session for that workspace
-- stores opaque session cookies in-memory, uses CSRF tokens for state-changing
-  requests, and rate-limits repeated login failures
-- supports explicit `--disable-origin-checks` and `--disable-csrf-checks`
-  overrides for operators who need to bypass those protections in public or
-  cross-origin deployments
-- supports `mindex ui serve --dev` for local iteration, which watches the
-  packaged `mindex/*.py` UI code plus `.mindex/ui_config.json`, restarts the
-  child server on changes, and disables origin/CSRF checks in that dev child
-  without permanently rewriting the saved UI config
-- persists session queue state and transcript messages under
-  `.mindex/task_queues.json`, including queue names, ordered task lists, and
-  per-session message history
-- lets users add, edit, delete, and drag-to-reorder tasks inside each
-  session-owned queue so upcoming work can be reprioritized directly in the
-  browser, and automatically drives those tasks through `queued`, `running`,
-  `completed`, or `failed` execution states instead of relying on manual task
-  status entry; stopping a session interrupts the active task and returns it to
-  the front of the queue so the next start resumes from that item
-- exposes the session transcript through the browser and through
-  `/api/sessions/<id>/messages`, while queue submissions can use
-  `/api/sessions/<id>/send` so a session behaves more like a persistent
-  conversation than a one-process-per-task launcher
-- presents each session itself as either `running` or `stopped`, and visually
-  highlights the front queue item when it is the active running task
-- keeps session workdirs constrained to the configured project root, preserves
-  one live shell per running session, and drains queued commands inside that
-  same session instead of launching a fresh subprocess per queue item
-- migrates legacy `.mindex/ui_config.json` files that still contain a plaintext
-  password and rewrites them into the secure hash-based format
+- installs Codoxear into an isolated venv at `~/.mindex/codoxear/venv` (no
+  reliance on system `pip`)
+- pins Codoxear to a known-good commit by default for reproducible installs
+  (override with `mindex codoxear install --source <pip-target>` if you want
+  to track upstream)
+- stores configuration under `~/.mindex/codoxear/config.json` (or
+  `MINDEX_CODOXEAR_CONFIG_PATH`), not inside any repository
+- never stores the Codoxear password in plaintext; only a salted PBKDF2 hash is
+  persisted
+- prompts for the password at serve time (or accepts `--password`) and then
+  passes it to Codoxear via the `CODEX_WEB_PASSWORD` environment variable for
+  the duration of the server process
+- defaults to localhost-only binding (`127.0.0.1`) and refuses to bind to
+  `0.0.0.0` / `::` unless `allow_remote=true` is explicitly configured
+- defaults `CODEX_BIN` to `mindex` so Codoxear-launched sessions inherit
+  Mindex-managed behavior by default
+- redacts `--password ...` values from Mindex logs (still avoid using
+  `--password` if shell history is a concern)
 
-Design direction:
+Beginner guide:
 
-- draws on the browser-accessible Codex control-room model shown by CodexUI and
-  the OpenAI Codex app, especially around session visibility and agent
-  management
-- keeps the remote-access convenience of community Codex web frontends, but
-  hardens Mindex with localhost-first binding, hashed credentials, CSRF
-  protection, and origin checks because reference projects explicitly leave
-  parts of that threat model to the operator
+1. Install Mindex itself.
+   Example:
+   ```bash
+   python3 -m pip install -e .
+   ```
+2. Run the one-step UI setup:
+   ```bash
+   mindex ui setup
+   ```
+3. Start the UI:
+   ```bash
+   mindex ui serve
+   ```
+4. Open the URL printed by Mindex in your browser.
+5. If you want your terminal-started sessions to appear in the UI, use the
+   broker:
+   ```bash
+   mindex ui broker -- <codex args>
+   ```
+
+Where things live:
+
+- Codoxear venv: `~/.mindex/codoxear/venv`
+- Secure config: `~/.mindex/codoxear/config.json`
+- Mindex-managed Codex home: `~/.mindex/codex-home`
+- Mindex logs: `~/.mindex/logs` when no project-local logs directory applies
+
+Password and security model:
+
+- the password hash is stored in config
+- the plaintext password is not stored in config
+- the plaintext password is passed to Codoxear only when the server process is
+  started
+- `mindex ui serve` verifies the password against the stored hash before
+  launching the server
+- localhost-only is the default
+- public binding requires explicit opt-in
+- Codoxear upstream does not provide TLS, so network security is still your
+  responsibility if you expose it beyond localhost
+
+Using the broker:
+
+- Codoxear also provides a broker for registering terminal-owned sessions.
+  Mindex exposes it as `mindex ui broker` so you do not need to put the venv
+  binary on your `PATH`.
+- If you want a short shell helper, add this function:
+
+  ```sh
+  codox() {
+    mindex ui broker -- "$@"
+  }
+  ```
+
+  Brokered sessions also use `CODEX_BIN=mindex` by default, so they inherit
+  the Mindex-managed behavior.
+
+Remote access (explicit opt-in):
+
+- Localhost-only is the default. If you really want LAN access, rotate the
+  config with explicit public binding:
+
+  ```bash
+  mindex ui reset-config --allow-remote --host 0.0.0.0
+  ```
+
+  Then start the UI again:
+
+  ```bash
+  mindex ui serve
+  ```
+
+Security warning:
+
+- Codoxear's upstream security model is intentionally minimal (password gating
+  only, no TLS). If you enable remote binding, use a secure transport (VPN,
+  SSH port-forward, or TLS reverse proxy).
 
 ### 7. Multi-agent branch and PR coordination skill
 
@@ -527,8 +662,7 @@ The repo skill is intended to:
 - `HISTORY.md` - tracked requirements and status
 - `logs/` - structured local execution, validation, and policy logs
 - `mindex/` - Python package for configure, logging, install hooks, skills,
-  launcher code, task queues, and the secure web UI that wraps Codex with
-  project policy
+  launcher code, Codoxear integration, and the Codex wrapper policy
 - `tests/` - automated validation for the package behavior
 - `setup.py` - packaging plus editable-install hook entry
 
@@ -537,10 +671,10 @@ The repo skill is intended to:
 Current automated validation includes:
 
 - `python3 -m unittest discover -s tests -v`
-- editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 pip install -e .`
+- editable-install validation with `MINDEX_SKIP_AUTO_CONFIGURE=1 python3 -m pip install -e .`
 - dry-run configure validation through the installed `mindex` command
-- secure UI config, live session/queue API flows, agent-manager, and CLI
-  routing tests in `tests/test_ui.py`
+- Codoxear install/setup/config/serve/broker security and CLI routing tests in
+  `tests/test_codoxear.py`
 - publish workflow validation with fake GitHub CLI responses and local Git
   remotes
 

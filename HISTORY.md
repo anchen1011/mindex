@@ -126,22 +126,19 @@
 - Make automatic GitHub publication the default launcher behavior so a user
   does not need to request PR creation manually on each interaction.
 
-#### 6. Secure Web UI
+#### 6. Codoxear UI Integration (Recommended)
 
 - Status: in progress
-- Add a web-accessible Mindex control surface for managing local coding agents
-  and reviewing recent Mindex activity.
-- Default the UI server to localhost-only access and require an explicit
-  opt-in before listening on non-local interfaces.
-- Store UI credentials as salted password hashes instead of plaintext values.
-- Protect authenticated state-changing requests with CSRF validation and
-  origin checks.
-- Rate-limit repeated login failures and avoid launching agent commands
-  through a shell.
-- Persist queued agent state and per-agent logs under `.mindex/` without
-  committing those runtime artifacts.
-- Support queue-local task management so users can add, edit, delete, and
-  reorder upcoming tasks inside a session queue.
+- Do not maintain an in-tree Mindex UI; prefer integrating with Codoxear's UI
+  for mobile-friendly handoff of live Codex TUI sessions.
+- Keep Codoxear runtime configuration under `~/.mindex/` (no repo-local config
+  in `.mindex/` directories).
+- Never store the Codoxear password in plaintext configuration; store only a
+  salted password hash (PBKDF2 or equivalent).
+- Default binding to localhost-only and require an explicit opt-in before
+  listening on non-local interfaces.
+- Document that Codoxear's upstream security model is intentionally minimal and
+  recommend VPN/SSH port-forward/TLS reverse proxy when enabling remote access.
 
 #### 7. Default Branch, Commit, and PR Automation
 
@@ -160,6 +157,9 @@
 - When Mindex launches Codex for project work, default that session to YOLO
   execution unless the user explicitly provides different approval or sandbox
   settings for the run.
+- When RTK is installed, make `mindex` initialize and use RTK by default in
+  the managed Codex home while leaving plain `codex` unchanged unless the user
+  configures vanilla Codex separately.
 
 #### 8. Container Mode
 

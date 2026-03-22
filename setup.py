@@ -80,6 +80,11 @@ setup(
     include_package_data=True,
     package_data={"mindex": ["assets/skills/*/SKILL.md", "assets/container/Dockerfile"]},
     python_requires=">=3.9",
-    entry_points={"console_scripts": ["mindex=mindex.cli:main", "mindex-ui-setup=mindex.ui_setup:main"]},
+    entry_points={
+        "console_scripts": [
+            "mindex=mindex.cli:main",
+            "mindex-ui-setup=mindex.codoxear:setup_entrypoint",
+        ]
+    },
     cmdclass=cmdclass,
 )
