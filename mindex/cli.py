@@ -5,6 +5,7 @@ import sys
 from typing import Iterable
 
 from mindex import __version__
+from mindex.container_mode import container_main, should_default_to_container
 from mindex.codoxear import main as codoxear_main
 from mindex.launcher import find_project_root, launch_codex
 
@@ -13,10 +14,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     project_root = find_project_root()
     if not args:
+        if should_default_to_container():
+            return container_main([], project_root=project_root)
         return launch_codex([], project_root=project_root)
     if args[0] in {"-V", "--version"}:
         print(__version__)
         return 0
+    if args[0] == "container":
+        return container_main(args[1:], project_root=project_root)
     if args[0] == "configure":
         configure_main = import_module("mindex.configure").main
         return configure_main(args)
