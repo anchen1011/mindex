@@ -24,6 +24,7 @@ that Codex environment.
 - make sure the managed instructions file inside the Mindex-managed Codex home is kept up to date
 - keep the default Mindex-managed Codex home under `~/.mindex/codex-home` so Mindex does not reuse vanilla `~/.codex`
 - install the packaged Mindex skills into `~/.mindex/codex-home/skills/` or the configured Codex home, including the multi-agent coordination skill
+- when `rtk` is available, initialize RTK inside the managed Codex home so `mindex` uses RTK by default without changing plain vanilla `codex`
 - link packaged skills back to the source tree when possible so editable-install skill edits take effect without another copy step
 - keep the managed `[profiles.mindex]` block in the Codex config file up to date
 - record configure activity under `logs/`
@@ -39,7 +40,7 @@ that Codex environment.
 
 1. Prefer a dry run first when you need to inspect the generated plan.
 2. Confirm the current workspace context when you pass `--project-root`; otherwise treat configure as a global Mindex setup step.
-3. Review the dependency command plan for Miniconda, Codex, NPM, and Tmux.
+3. Review the dependency command plan for Miniconda, Codex, NPM, Tmux, and RTK.
 4. Review the managed instructions to confirm they describe Mindex as a Codex wrapper, explain the `mindex` versus vanilla `codex` distinction, enforce the GitHub branch and fork policy, require verified PR creation on GitHub, commit the work as part of the default publication flow, and isolate concurrent agents onto separate branches and PRs by default.
 5. Confirm the packaged skills include `configure`, `repo`, and `multi-agent`.
 6. Re-run without `--dry-run` to apply the managed files.

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from mindex.codex_home import default_managed_logs_root
 from mindex.configure import configure_project
@@ -37,6 +38,8 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("configure", plan["packaged_skills"])
             self.assertIn("multi-agent", plan["packaged_skills"])
             self.assertIn("repo", plan["packaged_skills"])
+            self.assertTrue(any("rtk-ai/rtk" in command for command in plan["dependency_commands"]))
+            self.assertIn("rtk --version", plan["dependency_commands"])
 
     def test_configure_defaults_to_global_managed_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -78,6 +81,8 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn("any future task or repository work launched through `mindex`", instructions_text)
             self.assertIn("Installing Mindex through `pip install` prepares `mindex`", instructions_text)
             self.assertIn("Mindex keeps its managed Codex home under `~/.mindex/codex-home`", instructions_text)
+            self.assertIn("Mindex configures the managed Codex home to load RTK", instructions_text)
+            self.assertIn("Plain `codex` remains", instructions_text)
             self.assertIn("plain vanilla Codex command", instructions_text)
             self.assertIn("Load Mindex-managed skills from `~/.mindex/codex-home/skills`", instructions_text)
             self.assertIn("If a user asks Codex to configure Mindex", instructions_text)
@@ -99,6 +104,37 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn('sandbox_mode = "danger-full-access"', config_text)
             self.assertIn(f'CODEX_HOME = "{codex_home.as_posix()}"', config_text)
             self.assertIn("MINDEX_INSTRUCTIONS_FILE", config_text)
+
+    def test_configure_initializes_rtk_for_managed_codex_home_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            root.mkdir()
+            self._create_repo(root)
+            codex_home = Path(tmpdir) / "codex-home"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            fake_bin_dir.mkdir()
+            fake_rtk = fake_bin_dir / "rtk"
+            fake_rtk.write_text(
+                "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
+                "import sys\n"
+                "if sys.argv[1:] != ['init', '--codex']:\n"
+                "    raise SystemExit(1)\n"
+                "cwd = Path.cwd()\n"
+                "(cwd / 'AGENTS.md').write_text('@RTK.md\\n', encoding='utf-8')\n"
+                "(cwd / 'RTK.md').write_text('# fake rtk\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            fake_rtk.chmod(0o755)
+
+            with mock.patch.dict(os.environ, {"PATH": f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                result = configure_project(project_root=root, codex_home=codex_home, dry_run=False)
+
+            self.assertTrue((codex_home / "AGENTS.md").exists())
+            self.assertTrue((codex_home / "RTK.md").exists())
+            plan = json.loads((result.log_dir / "configure_plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["rtk_status"], "configured")
+            self.assertEqual(plan["rtk_init_command"], f"{fake_rtk} init --codex")
 
     def test_module_cli_supports_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
