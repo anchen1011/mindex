@@ -6,11 +6,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import sys
 from typing import Iterable
 
 from mindex.codex_home import default_managed_codex_home, default_managed_logs_root, default_vanilla_codex_home
 from mindex.logging_utils import append_action, create_log_run, write_json, write_status
+from mindex.rtk import ensure_rtk_codex_integration, resolve_rtk_command, rtk_codex_init_command
 
 
 MANAGED_BLOCK_START = "# BEGIN MINDEX MANAGED BLOCK"
@@ -53,6 +55,8 @@ def build_dependency_commands(project_root: Path | None) -> list[str]:
         f"{conda_exe} run -n mindex pip install {install_target}",
         "npm install -g @openai/codex",
         "python -m pip install --upgrade openai-codex || pip install --upgrade openai-codex",
+        "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh",
+        "rtk --version",
         "tmux -V",
     ]
 
@@ -74,9 +78,15 @@ Mindex keeps its managed Codex home under `~/.mindex/codex-home` by default so
 plain `~/.codex` stays vanilla while Mindex loads its own managed skills
 globally across workspaces.
 
+When `rtk` is installed, Mindex configures the managed Codex home to load RTK
+by default for `mindex`-launched Codex sessions. Plain `codex` remains
+unchanged unless the user separately configures RTK for that vanilla Codex
+environment.
+
 ## Operating rules
 
 - Run explicit tests for every meaningful change and record the results under `logs/`.
+- When available, prefer `rtk ...` for high-volume shell output (diffs, logs, large test runs) to reduce token usage.
 - Keep the original `codex` command untouched; it remains the plain vanilla Codex command.
 - Use `mindex` when you want the Mindex-managed instructions, packaged skills, and profile settings across projects.
 - Load Mindex-managed skills from `~/.mindex/codex-home/skills` instead of reusing `~/.codex/skills`.
@@ -265,6 +275,21 @@ def configure_project(
         installed_skills, skill_install_mode = install_packaged_skills(skills_root, dry_run=dry_run)
         append_action(log_run, f"Packaged skills ({skill_install_mode}): {', '.join(installed_skills)}")
 
+        rtk_command = resolve_rtk_command()
+        planned_rtk_init = shlex.join(rtk_codex_init_command(rtk_command or "rtk"))
+        append_action(log_run, f"Planned RTK Codex init: (cd {codex_home} && {planned_rtk_init})")
+        if dry_run:
+            rtk_status = "planned" if rtk_command else "rtk-not-found"
+        else:
+            rtk_result = ensure_rtk_codex_integration(codex_home)
+            rtk_status = rtk_result.status
+            if rtk_result.command:
+                append_action(log_run, f"RTK Codex init command: {shlex.join(rtk_codex_init_command(rtk_result.command))}")
+            if rtk_result.reason:
+                append_action(log_run, f"RTK Codex init status: {rtk_result.status} ({rtk_result.reason})")
+            else:
+                append_action(log_run, f"RTK Codex init status: {rtk_result.status}")
+
         instructions_text = render_instructions()
         managed_block = render_managed_profile_block(codex_home, instructions_path)
 
@@ -283,6 +308,8 @@ def configure_project(
             "packaged_skills": installed_skills,
             "skill_install_mode": skill_install_mode,
             "dependency_commands": dependency_commands,
+            "rtk_init_command": planned_rtk_init,
+            "rtk_status": rtk_status,
             "dry_run": dry_run,
         }
         write_json(log_run.run_dir / "configure_plan.json", plan_payload)
