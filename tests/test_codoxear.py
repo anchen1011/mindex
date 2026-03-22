@@ -244,5 +244,70 @@ if path:
             self.assertNotIn("sekret", combined)
             self.assertIn("****", combined)
 
+    def test_setup_installs_and_creates_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            logs_root = tmp_path / "logs"
+            config_path = tmp_path / "config.json"
+            venv_dir = tmp_path / "venv"
+
+            env = {
+                "MINDEX_LOGS_ROOT": str(logs_root),
+                "MINDEX_CODOXEAR_CONFIG_PATH": str(config_path),
+                "MINDEX_CODOXEAR_VENV_DIR": str(venv_dir),
+            }
+            with mock.patch("mindex.codoxear._run_install", return_value=0) as run_install:
+                with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()):
+                    with mock.patch.dict(os.environ, env, clear=False):
+                        rc = codoxear.main(["setup", "--password", "sekret"], invoked_as="ui")
+            self.assertEqual(rc, 0)
+            self.assertTrue(config_path.exists())
+            self.assertIn("Codoxear UI setup complete.", stdout.getvalue())
+            self.assertIn("mindex ui serve", stdout.getvalue())
+            run_install.assert_called_once()
+            raw = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("sekret", raw)
+
+    def test_setup_keeps_existing_config_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            original = codoxear._build_config_payload(
+                config_path=config_path,
+                host="127.0.0.1",
+                port=8743,
+                url_prefix="",
+                allow_remote=False,
+                password="first",
+                codex_home="/tmp/codex-home",
+                codex_bin="mindex",
+            )
+            codoxear._write_private_json(config_path, original)
+
+            env = {"MINDEX_CODOXEAR_CONFIG_PATH": str(config_path)}
+            with mock.patch("mindex.codoxear._run_install", return_value=0):
+                with mock.patch("mindex.codoxear._prompt_password") as prompt_password:
+                    with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()):
+                        with mock.patch.dict(os.environ, env, clear=False):
+                            rc = codoxear.main(["setup"], invoked_as="ui")
+            self.assertEqual(rc, 0)
+            self.assertIn("keeping it unchanged", stdout.getvalue())
+            prompt_password.assert_not_called()
+
+    def test_setup_can_serve_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            env = {"MINDEX_CODOXEAR_CONFIG_PATH": str(config_path)}
+            with mock.patch("mindex.codoxear._run_install", return_value=0):
+                with mock.patch("mindex.codoxear._serve", return_value=0) as serve:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        with mock.patch.dict(os.environ, env, clear=False):
+                            rc = codoxear.main(["setup", "--password", "sekret", "--serve"], invoked_as="ui")
+            self.assertEqual(rc, 0)
+            serve.assert_called_once()
+            self.assertEqual(serve.call_args.kwargs["invoked_as"], "ui")
+            self.assertEqual(serve.call_args.args[0], ["--password", "sekret"])
+
 if __name__ == "__main__":
     unittest.main()

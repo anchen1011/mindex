@@ -264,6 +264,74 @@ def _find_codoxear_broker(*, env: dict[str, str] | None = None) -> str | None:
     return shutil.which("codoxear-broker")
 
 
+def _add_shared_config_args(parser: argparse.ArgumentParser, *, include_password_help: str) -> None:
+    parser.add_argument("--host", default=DEFAULT_HOST_LOCAL)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--url-prefix", default="")
+    parser.add_argument("--allow-remote", action="store_true", default=False)
+    parser.add_argument("--password", default="", help=include_password_help)
+    parser.add_argument("--codex-home", default=str(default_managed_codex_home()))
+    parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
+
+
+def _write_config_from_args(
+    *,
+    env: dict[str, str] | None,
+    overwrite: bool,
+    host: str,
+    port: int,
+    url_prefix: str,
+    allow_remote: bool,
+    password: str,
+    codex_home: str,
+    codex_bin: str,
+) -> Path:
+    config_path = _default_config_path(env)
+    if config_path.exists() and not overwrite:
+        raise SystemExit(f"Config already exists at {config_path}. Use reset-config to overwrite.")
+
+    normalized_prefix = _normalize_url_prefix(url_prefix)
+    _assert_bind_is_allowed(host, allow_remote=allow_remote)
+    payload = _build_config_payload(
+        config_path=config_path,
+        host=host,
+        port=port,
+        url_prefix=normalized_prefix,
+        allow_remote=allow_remote,
+        password=password,
+        codex_home=codex_home,
+        codex_bin=codex_bin,
+    )
+    write_config(payload, env=env)
+    return config_path
+
+
+def _build_open_url(*, host: str, port: int, url_prefix: str) -> str:
+    normalized_prefix = _normalize_url_prefix(url_prefix)
+    visible_host = "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
+    if ":" in visible_host and not visible_host.startswith("["):
+        visible_host = f"[{visible_host}]"
+    return f"http://{visible_host}:{port}{normalized_prefix or ''}/"
+
+
+def _print_setup_summary(
+    *,
+    created_config: bool,
+    config_path: Path,
+    host: str,
+    port: int,
+    url_prefix: str,
+    invoked_as: str,
+) -> None:
+    action = "Created" if created_config else "Kept existing"
+    open_url = _build_open_url(host=host, port=port, url_prefix=url_prefix)
+    print("Codoxear UI setup complete.")
+    print(f"{action} config: {config_path}")
+    print(f"Start the UI: mindex {invoked_as} serve")
+    print(f"Open in your browser: {open_url}")
+    print(f"Register terminal sessions: mindex {invoked_as} broker -- <codex args>")
+
+
 def _run_install(argv: list[str], *, env: dict[str, str] | None, log_run) -> int:
     parser = argparse.ArgumentParser(prog="mindex codoxear install")
     parser.add_argument(
@@ -350,39 +418,101 @@ def _init_or_reset_config(
     invoked_as: str,
 ) -> int:
     parser = argparse.ArgumentParser(prog=f"mindex {invoked_as} {'reset-config' if overwrite else 'init-config'}")
-    parser.add_argument("--host", default=DEFAULT_HOST_LOCAL)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--url-prefix", default="")
-    parser.add_argument("--allow-remote", action="store_true", default=False)
-    parser.add_argument("--password", default="")
-    parser.add_argument("--codex-home", default=str(default_managed_codex_home()))
-    parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
+    _add_shared_config_args(parser, include_password_help="Password for the Codoxear UI.")
     args = parser.parse_args(argv)
-
-    config_path = _default_config_path(env)
-    if config_path.exists() and not overwrite:
-        raise SystemExit(f"Config already exists at {config_path}. Use reset-config to overwrite.")
-
-    url_prefix = _normalize_url_prefix(args.url_prefix)
-    _assert_bind_is_allowed(args.host, allow_remote=args.allow_remote)
 
     if args.password:
         # Even though we redact logs, avoid encouraging plaintext secrets in shell history.
         print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
     password = args.password or _prompt_password(label="Codoxear UI password")
-    payload = _build_config_payload(
-        config_path=config_path,
+    config_path = _write_config_from_args(
+        env=env,
+        overwrite=overwrite,
         host=args.host,
         port=args.port,
-        url_prefix=url_prefix,
+        url_prefix=args.url_prefix,
         allow_remote=args.allow_remote,
         password=password,
         codex_home=args.codex_home,
         codex_bin=args.codex_bin,
     )
-    write_config(payload, env=env)
     print(f"Wrote Codoxear config to {config_path}")
     return 0
+
+
+def _setup(argv: list[str], *, env: dict[str, str] | None, invoked_as: str, log_run) -> int:
+    parser = argparse.ArgumentParser(prog=f"mindex {invoked_as} setup")
+    parser.add_argument(
+        "--venv",
+        default=str(_default_venv_dir(env)),
+        help="Install Codoxear into this venv (default: ~/.mindex/codoxear/venv).",
+    )
+    parser.add_argument(
+        "--source",
+        default=DEFAULT_INSTALL_URL,
+        help="pip install target for Codoxear (defaults to the pinned upstream commit).",
+    )
+    _add_shared_config_args(
+        parser,
+        include_password_help="Password for the Codoxear UI. If omitted, setup prompts securely.",
+    )
+    parser.add_argument(
+        "--reset-config",
+        action="store_true",
+        default=False,
+        help="Overwrite any existing Codoxear config with new settings and a new password hash.",
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        default=False,
+        help="Start the UI immediately after setup completes.",
+    )
+    args = parser.parse_args(argv)
+
+    install_args = ["--venv", args.venv, "--source", args.source]
+    rc = _run_install(install_args, env=env, log_run=log_run)
+    if rc != 0:
+        return rc
+
+    config_path = _default_config_path(env)
+    created_config = False
+    if args.reset_config or not config_path.exists():
+        if args.password:
+            print("warning: avoid using --password on a shared machine; prefer the interactive prompt.", file=sys.stderr)
+        password = args.password or _prompt_password(label="Codoxear UI password")
+        config_path = _write_config_from_args(
+            env=env,
+            overwrite=True,
+            host=args.host,
+            port=args.port,
+            url_prefix=args.url_prefix,
+            allow_remote=args.allow_remote,
+            password=password,
+            codex_home=args.codex_home,
+            codex_bin=args.codex_bin,
+        )
+        created_config = True
+    else:
+        print(f"Existing Codoxear config found at {config_path}; keeping it unchanged.")
+
+    config = load_config(env=env)
+    _print_setup_summary(
+        created_config=created_config,
+        config_path=config_path,
+        host=config.host,
+        port=config.port,
+        url_prefix=config.url_prefix,
+        invoked_as=invoked_as,
+    )
+
+    if not args.serve:
+        return 0
+
+    serve_args: list[str] = []
+    if args.password:
+        serve_args.extend(["--password", args.password])
+    return _serve(serve_args, env=env, invoked_as=invoked_as)
 
 
 def _serve(argv: list[str], *, env: dict[str, str] | None, invoked_as: str) -> int:
@@ -455,17 +585,17 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
         args, legacy_warnings = _normalize_legacy_ui_args(args)
         for warning in legacy_warnings:
             print(f"warning: {warning}", file=sys.stderr)
-        if args and args[0] in {"init-config", "reset-config", "serve", "install", "broker"}:
+        if args and args[0] in {"setup", "init-config", "reset-config", "serve", "install", "broker"}:
             pass
         elif args:
             raise SystemExit(
-                "mindex ui now proxies to Codoxear. Use: mindex ui serve|init-config|reset-config|install|broker"
+                "mindex ui now proxies to Codoxear. Use: mindex ui setup|serve|init-config|reset-config|install|broker"
             )
         else:
             args = ["serve"]
 
     if not args:
-        raise SystemExit(f"Usage: mindex {invoked_as} <install|init-config|reset-config|serve|broker>")
+        raise SystemExit(f"Usage: mindex {invoked_as} <setup|install|init-config|reset-config|serve|broker>")
 
     sub = args[0]
     tail = args[1:]
@@ -481,7 +611,9 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
 
     try:
         write_status(log_run, "running")
-        if sub == "install":
+        if sub == "setup":
+            rc = _setup(tail, env=env, invoked_as=invoked_as, log_run=log_run)
+        elif sub == "install":
             rc = _run_install(tail, env=env, log_run=log_run)
         elif sub == "init-config":
             rc = _init_or_reset_config(argv=tail, env=env, overwrite=False, invoked_as=invoked_as)
@@ -502,3 +634,7 @@ def main(argv: Iterable[str] | None = None, *, invoked_as: str = "codoxear") -> 
     except Exception as exc:  # pragma: no cover - defensive
         write_status(log_run, "error", message=str(exc))
         raise
+
+
+def setup_entrypoint() -> int:
+    return main(["setup", *sys.argv[1:]], invoked_as="ui")
