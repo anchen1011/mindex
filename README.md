@@ -29,6 +29,24 @@ There are two simple setup paths:
 4. **Live session queue UI:** Mindex includes a local UI for managing simple
    live sessions, per-session queues, and visible transcripts.
 
+## How Mindex, Codex, and RTK fit together
+
+- `mindex` is a wrapper around Codex. It does not replace the Codex model.
+- `mindex` launches Codex with a separate managed home at
+  `~/.mindex/codex-home`.
+- plain `codex` stays vanilla by default and does not automatically inherit the
+  Mindex-managed setup.
+- when `rtk` is installed, `mindex configure` and the `mindex` launcher both
+  ensure RTK is initialized inside that managed Codex home, so `mindex`
+  sessions default to RTK-aware shell usage.
+- if `rtk` is not installed yet, Mindex still runs, but RTK-specific behavior
+  cannot activate until `rtk` is installed.
+
+In short:
+
+- use `mindex` when you want Mindex rules plus RTK-by-default behavior
+- use plain `codex` when you want the untouched vanilla Codex workflow
+
 Next, we will keep improving the Harness with a strong focus on **security**,
 **testing**, and **memory**.
 
@@ -79,6 +97,9 @@ Implemented behavior:
 - symlinks packaged skills back to the source tree when possible so editable
   installs pick up skill edits from the repo immediately
 - writes a managed `[profiles.mindex]` block into the Codex config file
+- when `rtk` is installed, runs `rtk init --codex` inside the managed
+  `~/.mindex/codex-home` so `mindex`-launched Codex sessions default to RTK
+  instructions
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
 - prepares dependency installation commands for Miniconda, NPM, Tmux, Codex,
@@ -151,6 +172,9 @@ Current implementation:
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
   `~/.mindex/codex-home` by default
+- `mindex` ensures the managed Codex home contains RTK Codex instructions when
+  the `rtk` binary is available, so `mindex` sessions default to RTK-aware
+  shell command usage
 - `mindex` also defaults Codex launches into YOLO mode by prepending
   `--dangerously-bypass-approvals-and-sandbox` unless the user already
   supplied explicit approval or sandbox flags for that run
@@ -166,7 +190,8 @@ Current implementation:
 - other `mindex ...` invocations proxy to `codex` from the detected workspace
   root
 - plain `codex` still exists as the unchanged vanilla command outside the
-  Mindex-managed workflow
+  Mindex-managed workflow, including RTK, unless the user configures vanilla
+  Codex separately
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch

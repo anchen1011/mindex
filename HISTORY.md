@@ -160,6 +160,9 @@
 - When Mindex launches Codex for project work, default that session to YOLO
   execution unless the user explicitly provides different approval or sandbox
   settings for the run.
+- When RTK is installed, make `mindex` initialize and use RTK by default in
+  the managed Codex home while leaving plain `codex` unchanged unless the user
+  configures vanilla Codex separately.
 
 ### Notes
 

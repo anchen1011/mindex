@@ -10,6 +10,7 @@ from typing import Iterable
 from mindex.codex_home import default_managed_codex_home, default_managed_logs_root
 from mindex.github_workflow import WorkflowError, ensure_feature_branch, initialize_local_git_repository, run_post_action_hook
 from mindex.logging_utils import append_action, create_log_run, write_status
+from mindex.rtk import ensure_rtk_codex_integration
 
 
 YOLO_FLAGS = ["--dangerously-bypass-approvals-and-sandbox"]
@@ -117,6 +118,13 @@ def launch_codex(
     )
     append_action(log_run, f"Proxy command: {shlex.join(command)}")
     append_action(log_run, f"Managed Codex home: {managed_codex_home}")
+    rtk_result = ensure_rtk_codex_integration(managed_codex_home, env=run_env)
+    if rtk_result.command:
+        append_action(log_run, f"RTK command: {rtk_result.command}")
+    if rtk_result.reason:
+        append_action(log_run, f"RTK Codex init: {rtk_result.status} ({rtk_result.reason})")
+    else:
+        append_action(log_run, f"RTK Codex init: {rtk_result.status}")
     if repo_init_result.initialized:
         append_action(
             log_run,

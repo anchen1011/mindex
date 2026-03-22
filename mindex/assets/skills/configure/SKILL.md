@@ -24,6 +24,7 @@ that Codex environment.
 - make sure the managed instructions file inside the Mindex-managed Codex home is kept up to date
 - keep the default Mindex-managed Codex home under `~/.mindex/codex-home` so Mindex does not reuse vanilla `~/.codex`
 - install the packaged Mindex skills into `~/.mindex/codex-home/skills/` or the configured Codex home, including the multi-agent coordination skill
+- when `rtk` is available, initialize RTK inside the managed Codex home so `mindex` uses RTK by default without changing plain vanilla `codex`
 - link packaged skills back to the source tree when possible so editable-install skill edits take effect without another copy step
 - keep the managed `[profiles.mindex]` block in the Codex config file up to date
 - record configure activity under `logs/`
