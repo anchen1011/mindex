@@ -211,6 +211,63 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(status["status"], "success")
             self.assertEqual(status["returncode"], 0)
 
+    def test_launch_codex_bootstraps_rtk_in_managed_codex_home_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            fake_bin_dir = Path(tmpdir) / "bin"
+            logs_root = root / "logs"
+            root.mkdir()
+            fake_bin_dir.mkdir()
+            (root / "README.md").write_text("# repo\n", encoding="utf-8")
+            (root / "HISTORY.md").write_text("# history\n", encoding="utf-8")
+
+            fake_rtk = fake_bin_dir / "rtk"
+            fake_rtk.write_text(
+                "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
+                "import sys\n"
+                "if sys.argv[1:] != ['init', '--codex']:\n"
+                "    raise SystemExit(1)\n"
+                "cwd = Path.cwd()\n"
+                "(cwd / 'AGENTS.md').write_text('@RTK.md\\n', encoding='utf-8')\n"
+                "(cwd / 'RTK.md').write_text('# fake rtk\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            fake_rtk.chmod(0o755)
+
+            fake_codex = fake_bin_dir / "fake-codex"
+            fake_codex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os\n"
+                "from pathlib import Path\n"
+                "path = os.environ['MINDEX_FAKE_OUTPUT']\n"
+                "codex_home = Path(os.environ['CODEX_HOME'])\n"
+                "with open(path, 'w', encoding='utf-8') as handle:\n"
+                "    json.dump({\n"
+                "        'agents_md': (codex_home / 'AGENTS.md').read_text(encoding='utf-8'),\n"
+                "        'rtk_md_exists': (codex_home / 'RTK.md').exists(),\n"
+                "    }, handle)\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            output_path = Path(tmpdir) / "codex-output.json"
+            managed_codex_home = Path(tmpdir) / "managed-codex-home"
+
+            env = {
+                "MINDEX_CODEX_BIN": str(fake_codex),
+                "MINDEX_CODEX_HOME": str(managed_codex_home),
+                "MINDEX_DISABLE_SCRIPT": "1",
+                "MINDEX_FAKE_OUTPUT": str(output_path),
+                "MINDEX_SKIP_AUTO_PUBLISH": "1",
+                "PATH": f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+            returncode = launch_codex(["status"], project_root=root, logs_root=logs_root, env=env)
+
+            self.assertEqual(returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["agents_md"], "@RTK.md\n")
+            self.assertTrue(payload["rtk_md_exists"])
+
     def test_launch_codex_uses_managed_logs_root_outside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             standalone = Path(tmpdir) / "standalone"

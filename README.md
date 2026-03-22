@@ -33,7 +33,8 @@ What happens:
    - creates a secure config at `~/.mindex/codoxear/config.json`
    - prompts you for the UI password without saving it in plaintext
 2. `mindex ui serve`
-   - starts the UI on `http://127.0.0.1:8743/`
+   - starts the UI listening on `0.0.0.0:8743`
+   - on the same machine, you can open `http://127.0.0.1:8743/`
    - asks for the password again so the plaintext password never needs to be stored in the config file
 
 If you prefer a single executable, Mindex also installs:
@@ -43,6 +44,24 @@ mindex-ui-setup
 ```
 
 That command is just a shortcut for `mindex ui setup`.
+
+## How Mindex, Codex, and RTK fit together
+
+- `mindex` is a wrapper around Codex. It does not replace the Codex model.
+- `mindex` launches Codex with a separate managed home at
+  `~/.mindex/codex-home`.
+- plain `codex` stays vanilla by default and does not automatically inherit the
+  Mindex-managed setup.
+- when `rtk` is installed, `mindex configure`, `pip install` auto-configure,
+  and the `mindex` launcher all ensure RTK is initialized inside that managed
+  Codex home, so `mindex` sessions default to RTK-aware shell usage.
+- if `rtk` is not installed yet, Mindex still runs, but RTK-specific behavior
+  cannot activate until `rtk` is installed.
+
+In short:
+
+- use `mindex` when you want Mindex rules plus RTK-by-default behavior
+- use plain `codex` when you want the untouched vanilla Codex workflow
 
 ## Project Highlights
 
@@ -110,10 +129,13 @@ Implemented behavior:
 - writes a managed `[profiles.mindex]` block into the Codex config file
 - makes the managed `mindex` profile default to YOLO execution with
   `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
+- when `rtk` is installed, runs `rtk init --codex` inside the managed
+  `~/.mindex/codex-home` so `mindex`-launched Codex sessions default to RTK
+  instructions
 - leaves the original `codex` command installed and unchanged, so plain Codex
   remains vanilla unless the user explicitly opts into the Mindex-managed setup
-- prepares dependency installation commands for Miniconda, NPM, Tmux, and
-  Codex
+- prepares dependency installation commands for Miniconda, NPM, Tmux, Codex,
+  and RTK
 - records configure runs under `logs/`
 
 Target workflows:
@@ -124,7 +146,8 @@ Target workflows:
     point across projects
   - allow `mindex configure` to be run globally without a project argument
   - keep the original `codex` command available in its normal vanilla state
-  - install required dependencies, including Miniconda, Codex, NPM, and Tmux
+  - install required dependencies, including Miniconda, Codex, NPM, Tmux, and
+    RTK
 
 - **Existing Codex workflow**
   - allow a user who already has Codex installed to ask Codex to configure
@@ -181,6 +204,9 @@ Current implementation:
 - `mindex configure ...` runs the configure workflow
 - `mindex` launches Codex with `CODEX_HOME` pointed at the Mindex-managed
   `~/.mindex/codex-home` by default
+- `mindex` ensures the managed Codex home contains RTK Codex instructions when
+  the `rtk` binary is available, so `mindex` sessions default to RTK-aware
+  shell command usage
 - `mindex` also defaults Codex launches into YOLO mode by prepending
   `--dangerously-bypass-approvals-and-sandbox` unless the user already
   supplied explicit approval or sandbox flags for that run
@@ -196,7 +222,8 @@ Current implementation:
 - other `mindex ...` invocations proxy to `codex` from the detected workspace
   root
 - plain `codex` still exists as the unchanged vanilla command outside the
-  Mindex-managed workflow
+  Mindex-managed workflow, including RTK, unless the user configures vanilla
+  Codex separately
 - when a `mindex`-launched Codex session starts on `main`, `master`,
   `production`, or another protected branch, Mindex first creates and switches
   to a fresh feature branch
@@ -306,8 +333,10 @@ Implemented behavior:
 - prompts for the password at serve time (or accepts `--password`) and then
   passes it to Codoxear via the `CODEX_WEB_PASSWORD` environment variable for
   the duration of the server process
-- defaults to localhost-only binding (`127.0.0.1`) and refuses to bind to
-  `0.0.0.0` / `::` unless `allow_remote=true` is explicitly configured
+- defaults to binding on `0.0.0.0` so the UI is reachable from other devices on
+  your network without extra host configuration
+- if you want local-machine-only behavior, use `--host 127.0.0.1` or
+  `--local-only` when resetting or recreating config
 - defaults `CODEX_BIN` to `mindex` so Codoxear-launched sessions inherit
   Mindex-managed behavior by default
 - redacts `--password ...` values from Mindex logs (still avoid using
@@ -350,8 +379,8 @@ Password and security model:
   started
 - `mindex ui serve` verifies the password against the stored hash before
   launching the server
-- localhost-only is the default
-- public binding requires explicit opt-in
+- by default the service listens on `0.0.0.0`
+- if you do not want that, explicitly configure `127.0.0.1` or `--local-only`
 - Codoxear upstream does not provide TLS, so network security is still your
   responsibility if you expose it beyond localhost
 
@@ -371,13 +400,13 @@ Using the broker:
   Brokered sessions also use `CODEX_BIN=mindex` by default, so they inherit
   the Mindex-managed behavior.
 
-Remote access (explicit opt-in):
+Binding mode:
 
-- Localhost-only is the default. If you really want LAN access, rotate the
-  config with explicit public binding:
+- Default setup already binds `0.0.0.0`. If you want to force local-only
+  behavior instead, rotate the config like this:
 
   ```bash
-  mindex ui reset-config --allow-remote --host 0.0.0.0
+  mindex ui reset-config --host 127.0.0.1 --local-only
   ```
 
   Then start the UI again:
