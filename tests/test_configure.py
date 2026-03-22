@@ -100,6 +100,8 @@ class ConfigureTests(unittest.TestCase):
             self.assertTrue((codex_home / "skills" / "configure").is_symlink())
             self.assertTrue((codex_home / "skills" / "repo").is_symlink())
             self.assertIn("[profiles.mindex]", config_text)
+            self.assertIn('approval_policy = "never"', config_text)
+            self.assertIn('sandbox_mode = "danger-full-access"', config_text)
             self.assertIn(f'CODEX_HOME = "{codex_home.as_posix()}"', config_text)
             self.assertIn("MINDEX_INSTRUCTIONS_FILE", config_text)
 
